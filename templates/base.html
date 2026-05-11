@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Intelligent Platform{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="role-{{ current_user.role }}">
+
+<!-- ── Mobile backdrop ────────────────────────────────────────── -->
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
+
+<div class="app-shell">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark"><span>⚡</span> Intelligent Platform</div>
+      <div class="logo-sub">Supply Chain Intelligence</div>
+    </div>
+
+    <div class="sidebar-user">
+      <div class="avatar">{{ current_user.full_name[0] if current_user.full_name else current_user.username[0].upper() }}</div>
+      <div class="user-info">
+        <div class="name">{{ current_user.full_name or current_user.username }}</div>
+        <div class="role-badge">{{ current_user.role }}</div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      {% if current_user.role == 'admin' %}
+      <div class="nav-section-label">Admin</div>
+      <a class="nav-item {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}"><span class="icon">▦</span> Dashboard</a>
+      <div class="nav-section-label">Views</div>
+      <a class="nav-item" href="{{ url_for('procurement_dashboard') }}"><span class="icon">🛒</span> Procurement</a>
+      <a class="nav-item" href="{{ url_for('supplychain_dashboard') }}"><span class="icon">🚚</span> Supply Chain</a>
+      <a class="nav-item" href="{{ url_for('inventory_dashboard') }}"><span class="icon">📦</span> Inventory</a>
+
+      {% elif current_user.role == 'procurement' %}
+      <div class="nav-section-label">Procurement</div>
+      <a class="nav-item {% if request.endpoint == 'procurement_dashboard' %}active{% endif %}" href="{{ url_for('procurement_dashboard') }}"><span class="icon">▦</span> Dashboard</a>
+      <a class="nav-item" href="{{ url_for('procurement_dashboard') }}#recommendations"><span class="icon">💡</span> Recommendations <span class="badge" id="proc-pending-badge"></span></a>
+      <a class="nav-item" href="{{ url_for('procurement_dashboard') }}#suppliers"><span class="icon">🏭</span> Suppliers</a>
+      <a class="nav-item" href="{{ url_for('procurement_dashboard') }}#audit"><span class="icon">📋</span> Audit Trail</a>
+
+      {% elif current_user.role == 'supplychain' %}
+      <div class="nav-section-label">Supply Chain</div>
+      <a class="nav-item {% if request.endpoint == 'supplychain_dashboard' %}active{% endif %}" href="{{ url_for('supplychain_dashboard') }}"><span class="icon">▦</span> Dashboard</a>
+      <a class="nav-item" href="{{ url_for('supplychain_dashboard') }}#network"><span class="icon">🗺️</span> Route Network</a>
+      <a class="nav-item" href="{{ url_for('supplychain_dashboard') }}#whatif"><span class="icon">🔮</span> What-If Tool</a>
+      <a class="nav-item" href="{{ url_for('supplychain_dashboard') }}#events"><span class="icon">⚠️</span> Route Events</a>
+
+      {% elif current_user.role == 'inventory' %}
+      <div class="nav-section-label">Inventory</div>
+      <a class="nav-item {% if request.endpoint == 'inventory_dashboard' %}active{% endif %}" href="{{ url_for('inventory_dashboard') }}"><span class="icon">▦</span> Dashboard</a>
+      <a class="nav-item" href="{{ url_for('inventory_dashboard') }}#alerts"><span class="icon">🔔</span> Alerts <span class="badge" id="inv-alert-badge"></span></a>
+      <a class="nav-item" href="{{ url_for('inventory_dashboard') }}#stock"><span class="icon">📊</span> Stock Status</a>
+      <a class="nav-item" href="{{ url_for('inventory_dashboard') }}#recommendations"><span class="icon">💡</span> Recommendations</a>
+      {% endif %}
+    </nav>
+
+    <div class="sidebar-footer">
+      <a href="{{ url_for('logout') }}"><span>⎋</span> Sign out</a>
+    </div>
+  </aside>
+
+  <!-- ── Main ─────────────────────────────────────────────────── -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Menu">
+          <span></span><span></span><span></span>
+        </button>
+        <div>
+          <div class="topbar-title">{% block page_title %}Dashboard{% endblock %}</div>
+          <div class="topbar-breadcrumb">{% block breadcrumb %}{% endblock %}</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="topbar-time" id="live-clock"></span>
+
+        <!-- Live indicator -->
+        <span id="sse-indicator" title="Live alerts active" style="display:none;font-size:.72rem;font-family:'DM Mono',monospace;color:var(--text3);">
+          <span class="live-dot"></span>Live
+        </span>
+
+        <!-- Bell -->
+        <button class="alert-bell" id="bell-btn" onclick="toggleAlertPanel()">
+          🔔 <span id="bell-count"></span>
+          <span class="dot hidden" id="bell-dot"></span>
+        </button>
+
+        <!-- Theme toggle -->
+        <button class="theme-toggle" id="theme-btn" onclick="cycleTheme()" title="Toggle theme">🌙</button>
+
+        <!-- Settings -->
+        <button class="btn btn-ghost btn-sm" onclick="openSettings()" title="Settings" style="padding:5px 9px;">⚙</button>
+      </div>
+    </header>
+
+    <main class="page-content">{% block content %}{% endblock %}</main>
+  </div>
+</div>
+
+<!-- ── Toast ─────────────────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<!-- ── Global modal ─────────────────────────────────────────── -->
+<div class="modal-overlay" id="global-modal">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">Action</div>
+    <div id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings drawer ────────────────────────────────────────── -->
+<div class="settings-overlay" id="settings-overlay" onclick="closeSettingsIfBg(event)">
+  <div class="settings-drawer" id="settings-drawer">
+    <div class="settings-header">
+      <h2>⚙ Settings</h2>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="settings-body">
+
+      <!-- Appearance -->
+      <div class="settings-section">
+        <div class="settings-section-label">Appearance</div>
+
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:10px;">
+          <div>
+            <div class="settings-row-label">Theme</div>
+            <div class="settings-row-sub">Choose your preferred colour scheme</div>
+          </div>
+          <div class="theme-swatches">
+            <div>
+              <div class="theme-swatch dark active" id="swatch-dark" onclick="setTheme('dark')" title="Dark">
+                <div class="swatch-sidebar"></div><div class="swatch-main"></div>
+              </div>
+              <div class="swatch-label">Dark</div>
+            </div>
+            <div>
+              <div class="theme-swatch light" id="swatch-light" onclick="setTheme('light')" title="Light">
+                <div class="swatch-sidebar"></div><div class="swatch-main"></div>
+              </div>
+              <div class="swatch-label">Light</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:10px;padding-top:14px;">
+          <div>
+            <div class="settings-row-label">Density</div>
+            <div class="settings-row-sub">Control content spacing</div>
+          </div>
+          <div class="density-opts">
+            <div class="density-opt" id="d-compact"     onclick="setDensity('compact')">Compact</div>
+            <div class="density-opt active" id="d-default" onclick="setDensity('default')">Default</div>
+            <div class="density-opt" id="d-comfortable" onclick="setDensity('comfortable')">Comfortable</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div class="settings-section">
+        <div class="settings-section-label">Notifications</div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label">Real-time alerts</div>
+            <div class="settings-row-sub">SSE push (no page refresh needed)</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="pref-sse" checked onchange="toggleSSE(this.checked)">
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label">Desktop notifications</div>
+            <div class="settings-row-sub">Browser push for P1 alerts</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="pref-notif" onchange="toggleDesktopNotif(this.checked)">
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label">Sound alerts</div>
+            <div class="settings-row-sub">Beep on new P1 alerts</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="pref-sound">
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Data -->
+      <div class="settings-section">
+        <div class="settings-section-label">Data & Exports</div>
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px;padding-top:0;">
+          <div class="settings-row-label">Quick exports</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <a href="/export/forecasts" class="btn btn-export btn-sm">📊 Forecasts CSV</a>
+            <a href="/export/recommendations/procurement" class="btn btn-export btn-sm">🛒 Procurement CSV</a>
+            <a href="/export/recommendations/inventory"   class="btn btn-export btn-sm">📦 Inventory CSV</a>
+            <a href="/export/stock-status" class="btn btn-export btn-sm">📋 Stock CSV</a>
+            <a href="/export/audit/procurement" class="btn btn-export btn-sm">📋 Audit CSV</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- About -->
+      <div class="settings-section">
+        <div class="settings-section-label">About</div>
+        <div style="font-size:.78rem;color:var(--text2);line-height:1.7;">
+          <div>Intelligence Platform <span class="mono" style="color:var(--text3);">v3.0</span></div>
+          <div>Logged in as <strong>{{ current_user.full_name or current_user.username }}</strong></div>
+          <div class="mono" style="font-size:.7rem;color:var(--text3);margin-top:4px;">Role: {{ current_user.role }}</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// CORE UTILITIES
+// ══════════════════════════════════════════════════════════════
+
+// ── Clock ──────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  document.getElementById('live-clock').textContent =
+    now.toLocaleString('en-IN', {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'short',year:'numeric'}) + ' IST';
+}
+setInterval(updateClock, 1000); updateClock();
+
+// ── IST date formatter (for JS-rendered timestamps) ────────────────────────
+function fmtIST(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return new Date(dateStr + (dateStr.includes('Z') || dateStr.includes('+') ? '' : 'Z'))
+      .toLocaleString('en-IN', {timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+  } catch(e) { return dateStr.slice(0,16); }
+}
+
+
+// ── Toast ──────────────────────────────────────────────────────
+function showToast(msg, type='info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ── Modal ──────────────────────────────────────────────────────
+let _modalConfirmFn = null;
+function openModal(title, bodyHTML, confirmFn, confirmLabel='Confirm') {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = bodyHTML;
+  document.getElementById('modal-confirm').textContent = confirmLabel;
+  _modalConfirmFn = confirmFn;
+  document.getElementById('global-modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('global-modal').classList.remove('open');
+  _modalConfirmFn = null;
+}
+document.getElementById('modal-confirm').addEventListener('click', () => { if (_modalConfirmFn) _modalConfirmFn(); });
+document.getElementById('global-modal').addEventListener('click', function(e) { if (e.target === this) closeModal(); });
+
+// ── API helper ─────────────────────────────────────────────────
+async function apiFetch(url, opts={}) {
+  const defaults = { headers: {'Content-Type':'application/json'} };
+  const res = await fetch(url, {...defaults, ...opts});
+  return res.json();
+}
+
+// ── Rec decision ───────────────────────────────────────────────
+function decideRec(recId, decision, role) {
+  if (decision === 'modified') {
+    // Build smart fields based on role
+    const procFields = role === 'procurement' ? `
+      <div class="form-group"><label class="form-label">Adjust order quantity (units)</label>
+        <input class="form-input" id="mod-qty" type="number" placeholder="e.g. 500"></div>
+      <div class="form-group"><label class="form-label">Override supplier</label>
+        <select class="form-select" id="mod-supplier">
+          <option value="">— keep LP recommendation —</option>
+          <option value="1">Factory Noida</option>
+          <option value="2">Factory Pune</option>
+          <option value="3">Factory Chennai</option>
+          <option value="4">Factory Surat</option>
+          <option value="5">Factory Kolkata</option>
+        </select></div>` : '';
+    const invFields = role === 'inventory' ? `
+      <div class="form-group"><label class="form-label">Adjust transfer quantity (units)</label>
+        <input class="form-input" id="mod-qty" type="number" placeholder="e.g. 200"></div>` : '';
+    const scFields = role === 'supplychain' ? `
+      <div class="form-group"><label class="form-label">Override transport mode</label>
+        <select class="form-select" id="mod-mode">
+          <option value="">— keep recommended —</option>
+          <option value="rail">🚂 Rail</option>
+          <option value="road_truck">🚛 Road Truck</option>
+          <option value="air_cargo">✈️ Air Cargo</option>
+          <option value="sea_vessel">🚢 Sea Vessel</option>
+          <option value="all_weather">🚛 All-Weather Truck</option>
+        </select></div>` : '';
+    openModal('Modify Recommendation',
+      `${procFields}${invFields}${scFields}
+       <div class="form-group"><label class="form-label">Reason for modification</label>
+       <textarea class="form-input" id="mod-note" rows="3" placeholder="Briefly explain what you changed and why…"></textarea></div>`,
+      async () => {
+        const note = document.getElementById('mod-note')?.value || '';
+        const qty  = document.getElementById('mod-qty')?.value;
+        const supp = document.getElementById('mod-supplier')?.value;
+        const mode = document.getElementById('mod-mode')?.value;
+        const modified = {};
+        if (qty)  modified.qty = parseInt(qty);
+        if (supp) modified.supplier_override = parseInt(supp);
+        if (mode) modified.mode_override = mode;
+        await _sendDecision(recId, 'modified', note, Object.keys(modified).length ? modified : null, role);
+        closeModal();
+      }, 'Save Modification');
+    return;
+  }
+  if (decision === 'rejected') {
+    openModal('Reject Recommendation',
+      `<div class="form-group"><label class="form-label">Reason for rejection</label>
+       <textarea class="form-input" id="rej-note" rows="3" placeholder="Explain why…"></textarea></div>`,
+      async () => { await _sendDecision(recId,'rejected',document.getElementById('rej-note').value,null,role); closeModal(); },
+      'Reject');
+    return;
+  }
+  _sendDecision(recId, decision, '', null, role);
+}
+async function _sendDecision(recId, decision, note, modified, role) {
+  const body = { decision, note };
+  if (modified) body.modified_values = modified;
+  const res = await apiFetch(`/${role}/recommendations/${recId}/decide`, {method:'POST', body:JSON.stringify(body)});
+  if (res.status) {
+    showToast(`Recommendation ${res.status}`, decision==='approved'?'success':'info');
+    const card = document.getElementById(`rec-${recId}`);
+    if (card) {
+      const acts = card.querySelector('.rec-actions');
+      if (acts) acts.innerHTML = `<span class="badge badge-${res.status}">${res.status}</span>`;
+    }
+  } else showToast('Error saving decision','error');
+}
+
+// ── Badge helpers ──────────────────────────────────────────────
+function severityBadge(s) { return `<span class="badge badge-${s.toLowerCase()}">${s}</span>`; }
+function statusBadge(s)   { return `<span class="badge badge-${s.toLowerCase()}">${s}</span>`; }
+function confBar(v) {
+  const pct = Math.round(v*100);
+  const c = pct>=85?'var(--green)':pct>=70?'var(--p2)':'var(--red)';
+  return `<div style="display:flex;align-items:center;gap:8px;">
+    <div class="progress-bar" style="width:80px;"><div class="progress-fill" style="width:${pct}%;background:${c}"></div></div>
+    <span class="text-mono text-xs">${pct}%</span></div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ALERT BELL
+// ══════════════════════════════════════════════════════════════
+function toggleAlertPanel() { window.location.hash = '#alerts'; }
+function _updateBell(cnt) {
+  document.getElementById('bell-count').textContent = cnt > 0 ? cnt : '';
+  const dot = document.getElementById('bell-dot');
+  cnt > 0 ? dot.classList.remove('hidden') : dot.classList.add('hidden');
+  // Update sidebar badge if present
+  const ib = document.getElementById('inv-alert-badge');
+  if (ib) ib.textContent = cnt > 0 ? cnt : '';
+}
+
+// SSE-based live bell
+let _sseConn = null;
+function startSSE() {
+  if (_sseConn) _sseConn.close();
+  _sseConn = new EventSource('/api/stream/alerts');
+  _sseConn.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    _updateBell(d.count || 0);
+  };
+  _sseConn.onerror = () => {
+    // fallback to polling if SSE fails
+    _sseConn.close(); _sseConn = null;
+    setTimeout(startSSE, 10000);
+  };
+  document.getElementById('sse-indicator').style.display = 'flex';
+}
+function stopSSE() {
+  if (_sseConn) { _sseConn.close(); _sseConn = null; }
+  document.getElementById('sse-indicator').style.display = 'none';
+  startPolling();
+}
+
+// Polling fallback
+async function refreshBell() {
+  try {
+    const d = await apiFetch('/api/alerts/unread-count');
+    _updateBell(d.count || 0);
+  } catch(e) {}
+}
+let _pollInterval = null;
+function startPolling() {
+  if (_pollInterval) clearInterval(_pollInterval);
+  _pollInterval = setInterval(refreshBell, 30000);
+  refreshBell();
+}
+function toggleSSE(enabled) {
+  if (enabled) { if (_pollInterval) clearInterval(_pollInterval); startSSE(); }
+  else { stopSSE(); }
+  savePref('sse', enabled);
+}
+
+// ── Desktop notifications ──────────────────────────────────────
+function toggleDesktopNotif(enabled) {
+  if (enabled && Notification.permission !== 'granted') {
+    Notification.requestPermission().then(p => {
+      if (p !== 'granted') {
+        document.getElementById('pref-notif').checked = false;
+        showToast('Browser notifications denied','error');
+      }
+    });
+  }
+  savePref('desktopNotif', enabled);
+}
+
+// ══════════════════════════════════════════════════════════════
+// THEME SYSTEM
+// ══════════════════════════════════════════════════════════════
+const THEMES = ['dark','light'];
+let _currentTheme = 'dark';
+
+function setTheme(theme) {
+  _currentTheme = theme;
+  document.body.classList.remove('light','dark');
+  if (theme === 'light') document.body.classList.add('light');
+  // Theme button emoji
+  document.getElementById('theme-btn').textContent = theme === 'light' ? '☀️' : '🌙';
+  // Swatch highlights
+  document.getElementById('swatch-dark').classList.toggle('active', theme === 'dark');
+  document.getElementById('swatch-light').classList.toggle('active', theme === 'light');
+  // Persist
+  localStorage.setItem('platform_theme', theme);
+  // Update Chart.js defaults if any charts exist
+  if (window.Chart) {
+    const textColor = theme === 'light' ? '#4b5563' : '#8892a4';
+    const gridColor = theme === 'light' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)';
+    Chart.defaults.color = textColor;
+    Chart.defaults.borderColor = gridColor;
+    // Re-render active charts
+    Object.values(Chart.instances).forEach(c => c.update());
+  }
+}
+
+function cycleTheme() {
+  const next = _currentTheme === 'dark' ? 'light' : 'dark';
+  setTheme(next);
+}
+
+function loadTheme() {
+  const saved = localStorage.getItem('platform_theme') || 'dark';
+  setTheme(saved);
+}
+
+// ══════════════════════════════════════════════════════════════
+// DENSITY
+// ══════════════════════════════════════════════════════════════
+function setDensity(d) {
+  document.body.classList.remove('density-compact','density-comfortable');
+  if (d !== 'default') document.body.classList.add(`density-${d}`);
+  ['compact','default','comfortable'].forEach(opt => {
+    const el = document.getElementById(`d-${opt}`);
+    if (el) el.classList.toggle('active', opt === d);
+  });
+  localStorage.setItem('platform_density', d);
+}
+function loadDensity() {
+  setDensity(localStorage.getItem('platform_density') || 'default');
+}
+
+// ══════════════════════════════════════════════════════════════
+// SETTINGS DRAWER
+// ══════════════════════════════════════════════════════════════
+function openSettings() {
+  document.getElementById('settings-overlay').classList.add('open');
+  // Sync toggles from prefs
+  document.getElementById('pref-sse').checked   = getPref('sse', true);
+  document.getElementById('pref-notif').checked = getPref('desktopNotif', false);
+  document.getElementById('pref-sound').checked = getPref('sound', false);
+}
+function closeSettings() { document.getElementById('settings-overlay').classList.remove('open'); }
+function closeSettingsIfBg(e) { if (e.target === document.getElementById('settings-overlay')) closeSettings(); }
+
+// ══════════════════════════════════════════════════════════════
+// MOBILE SIDEBAR
+// ══════════════════════════════════════════════════════════════
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-backdrop').classList.toggle('open');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('open');
+}
+
+// ══════════════════════════════════════════════════════════════
+// PREFS (localStorage)
+// ══════════════════════════════════════════════════════════════
+function savePref(key, val) {
+  const prefs = JSON.parse(localStorage.getItem('platform_prefs') || '{}');
+  prefs[key] = val;
+  localStorage.setItem('platform_prefs', JSON.stringify(prefs));
+}
+function getPref(key, fallback) {
+  const prefs = JSON.parse(localStorage.getItem('platform_prefs') || '{}');
+  return key in prefs ? prefs[key] : fallback;
+}
+
+// ══════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+  loadTheme();
+  loadDensity();
+  if (getPref('sse', true)) {
+    startSSE();
+  } else {
+    startPolling();
+  }
+});
+</script>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

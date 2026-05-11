@@ -1,0 +1,525 @@
+{% extends "base.html" %}
+{% block title %}Admin — Intelligent Platform{% endblock %}
+{% block page_title %}Admin Dashboard{% endblock %}
+{% block breadcrumb %}Pipeline · Accuracy · Month Close{% endblock %}
+{% block content %}
+
+<div class="stat-grid stat-grid-4 mb-16">
+  <div class="stat-card" style="--accent-color:var(--purple)">
+    <div class="stat-label">Forecast Series</div>
+    <div class="stat-value" id="kpi-fc">—</div>
+    <div class="stat-change text-dim" id="kpi-fc-sub"></div>
+    <div class="stat-icon">📊</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--p2)">
+    <div class="stat-label">Pending Approvals</div>
+    <div class="stat-value" id="kpi-pend">—</div>
+    <div class="stat-icon">💡</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--green)">
+    <div class="stat-label">WMAPE 7-day</div>
+    <div class="stat-value" id="kpi-w7">—</div>
+    <div class="stat-change" id="kpi-w7-lbl"></div>
+    <div class="stat-icon">🎯</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--blue)">
+    <div class="stat-label">WMAPE 30-day</div>
+    <div class="stat-value" id="kpi-w30">—</div>
+    <div class="stat-change" id="kpi-w30-lbl"></div>
+    <div class="stat-icon">📈</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-16">
+  <!-- Upload card -->
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">📁 Data Upload</div><div class="card-subtitle">Feed the ML pipeline</div></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Data Type</label>
+      <select class="form-select" id="upload-type">
+        <option value="sales">Sales History</option>
+        <option value="suppliers">Supplier Records</option>
+        <option value="products">Product Catalogue</option>
+        <option value="warehouses">Warehouse Data</option>
+      </select>
+    </div>
+    <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div class="upload-zone-icon">📂</div>
+      <div class="upload-zone-text">Drop CSV here or click to browse</div>
+      <div class="upload-zone-sub">Max 16 MB · CSV format</div>
+    </div>
+    <input type="file" id="file-input" accept=".csv" class="hidden">
+    <div id="upload-status" class="mt-8"></div>
+    <div class="mt-12">
+      <div class="text-xs text-dim mono mb-8" style="text-transform:uppercase;letter-spacing:.06em;">Recent Uploads</div>
+      <table class="data-table">
+        <thead><tr><th>File</th><th>Type</th><th>Rows</th><th>Status</th><th>When (IST)</th></tr></thead>
+        <tbody>
+          {% for u in uploads %}
+          <tr>
+            <td class="mono text-xs">{{ u.filename[:24] }}{% if u.filename|length > 24 %}…{% endif %}</td>
+            <td><span class="badge badge-p3">{{ u.upload_type }}</span></td>
+            <td class="mono">{{ u.row_count or '—' }}</td>
+            <td><span class="badge badge-{{ u.status }}">{{ u.status }}</span></td>
+            <td class="text-dim text-xs mono">{{ u.uploaded_at | fmtdate }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="text-dim" style="text-align:center;padding:20px;">No uploads yet</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ML Pipeline card -->
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">⚙️ ML Pipeline</div><div class="card-subtitle">Prophet + LSTM · Optimise</div></div>
+      <span class="badge badge-{{ last_run.status if last_run else 'pending' }}" id="pipeline-badge">
+        {{ last_run.status if last_run else 'no runs' }}
+      </span>
+    </div>
+
+    <!-- Engine status banner -->
+    <div id="engine-banner" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:14px;">
+      <span id="engine-dot" style="width:10px;height:10px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:background .3s;"></span>
+      <span id="engine-label" style="font-size:.78rem;color:var(--text2);flex:1;">Checking engine…</span>
+      <button class="btn btn-ghost btn-sm" onclick="showEngineHelp()" style="font-size:.7rem;padding:3px 8px;">?</button>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Run Mode</label>
+      <select class="form-select" id="run-mode">
+        <option value="full_retrain">Full Retrain — fit trend, seasonality, AR weights</option>
+        <option value="incremental">Incremental — add new data, update weights</option>
+        <option value="forecast_only" selected>Forecast Only — use existing parameters</option>
+      </select>
+    </div>
+    <button class="btn btn-primary w-full" id="run-btn" onclick="runPipeline()" style="justify-content:center;padding:10px;">▶ Run Pipeline</button>
+    <div class="log-terminal mt-12" id="pipeline-log">{% if last_run %}{{ last_run.log_text }}{% else %}// No runs yet — click Run Pipeline to start.{% endif %}</div>
+
+    <!-- Live WMAPE after run -->
+    <div class="grid-2 mt-12" style="gap:10px;" id="wmape-gauges" style="display:none;">
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center;">
+        <div class="text-xs text-dim mono mb-4">WMAPE 7-day</div>
+        <div id="wmape-7d" style="font-family:'Syne',sans-serif;font-size:1.7rem;font-weight:800;">—</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center;">
+        <div class="text-xs text-dim mono mb-4">WMAPE 30-day</div>
+        <div id="wmape-30d" style="font-family:'Syne',sans-serif;font-size:1.7rem;font-weight:800;">—</div>
+      </div>
+    </div>
+
+    <!-- Run History (JS-rendered so it live-updates) -->
+    <div class="mt-12">
+      <div class="text-xs text-dim mono mb-8" style="text-transform:uppercase;letter-spacing:.06em;">Run History</div>
+      <div style="max-height:200px;overflow-y:auto;">
+        <table class="data-table">
+          <thead><tr><th>Mode</th><th>Status</th><th>W7d</th><th>W30d</th><th>When (IST)</th></tr></thead>
+          <tbody id="run-history-tbody">
+            {% for r in ml_runs %}
+            <tr>
+              <td class="mono text-xs">{{ r.run_type }}</td>
+              <td><span class="badge badge-{{ r.status }}">{{ r.status }}</span></td>
+              <td class="mono text-xs">{% if r.wmape_7d %}{{ r.wmape_7d }}%{% else %}—{% endif %}</td>
+              <td class="mono text-xs">{% if r.wmape_30d %}{{ r.wmape_30d }}%{% else %}—{% endif %}</td>
+              <td class="text-dim text-xs mono">{{ r.started_at | fmtdate }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-dim" style="text-align:center;padding:14px;">No runs yet</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chart row 1 -->
+<div class="grid-3 mb-16">
+  <div class="card">
+    <div class="card-header"><div class="card-title">📊 Forecast by Category</div><div class="card-subtitle">7d vs 30d · units</div></div>
+    <div class="chart-wrap"><canvas id="chart-cat"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">🏭 Forecast by Warehouse</div>
+      <select class="form-select" id="wh-filter" onchange="buildWhChart()" style="width:110px;padding:4px 8px;font-size:.75rem;">
+        <option value="all">All</option><option value="FMCG">FMCG</option>
+        <option value="Electronics">Electronics</option><option value="Clothing">Clothing</option>
+      </select>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-wh"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">🎯 WMAPE Trend</div><div class="card-subtitle">Accuracy over runs</div></div>
+    <div class="chart-wrap"><canvas id="chart-wmape"></canvas></div>
+  </div>
+</div>
+
+<!-- Chart row 2: Month close + drilldown + users -->
+<div class="grid-2-1">
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">📅 Month Close & Accuracy</div><div class="card-subtitle">WMAPE per closed month</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="openMonthClose()">Close Month</button>
+    </div>
+    <!-- Empty state shown when no closes yet -->
+    <div id="month-chart-empty" style="padding:24px;text-align:center;color:var(--text3);font-size:.8rem;">
+      No closed months yet — click "Close Month" to lock a forecast period.
+    </div>
+    <div class="chart-wrap mb-16" id="month-chart-wrap" style="display:none;"><canvas id="chart-month"></canvas></div>
+
+    <div class="card-header mt-8" style="border-top:1px solid var(--border);padding-top:16px;">
+      <div class="card-title" style="font-size:.85rem;">🔍 Product Drilldown</div>
+      <select class="form-select" id="drill-pid" onchange="loadDrilldown()" style="width:140px;padding:4px 8px;font-size:.75rem;">
+        {% for i in range(1,21) %}<option value="{{ i }}">Product {{ i }}</option>{% endfor %}
+      </select>
+    </div>
+    <div id="drill-empty" style="padding:16px;text-align:center;color:var(--text3);font-size:.8rem;">Run pipeline to populate drilldown.</div>
+    <div class="chart-wrap mt-8" id="drill-wrap" style="display:none;"><canvas id="chart-drill"></canvas></div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card">
+      <div class="card-header"><div class="card-title">👤 Users</div><button class="btn btn-ghost btn-sm" onclick="openAddUser()">+ Add</button></div>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Role</th><th>Last Login (IST)</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td><div style="font-weight:600;font-size:.82rem;">{{ u.full_name or u.username }}</div>
+                <div class="mono text-xs text-dim">@{{ u.username }}</div></td>
+            <td><span class="badge" style="background:rgba(255,255,255,.05);color:var(--text2)">{{ u.role }}</span></td>
+            <td class="mono text-xs text-dim">{{ u.last_login | fmtdate if u.last_login else 'Never' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">⚡ Category Accuracy</div></div>
+      <div id="cat-accuracy-panel" style="padding:12px;">
+        <div class="text-dim text-xs" style="text-align:center;padding:12px;" id="cat-acc-empty">Run pipeline to see accuracy</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const CD = {
+  responsive:true, maintainAspectRatio:true,
+  plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}},
+  scales:{
+    x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}},
+    y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}}
+  }
+};
+const charts={};
+let whData=[];
+
+// ── Stats (includes cat_accuracy on every load) ────────────────
+async function loadStats(){
+  const d=await apiFetch('/admin/stats');
+  document.getElementById('kpi-fc').textContent   = d.forecasts||0;
+  document.getElementById('kpi-pend').textContent = d.pending_recs||0;
+  if(d.last_run){
+    document.getElementById('kpi-w7').textContent  = d.last_run.wmape_7d+'%';
+    document.getElementById('kpi-w30').textContent = d.last_run.wmape_30d+'%';
+    const cls7  = d.last_run.wmape_7d  < 10 ? 'up' : 'down';
+    const cls30 = d.last_run.wmape_30d < 12 ? 'up' : 'down';
+    document.getElementById('kpi-w7-lbl').className  = `stat-change ${cls7}`;
+    document.getElementById('kpi-w30-lbl').className = `stat-change ${cls30}`;
+    document.getElementById('kpi-w7-lbl').textContent  = d.last_run.run_type;
+    document.getElementById('kpi-w30-lbl').textContent = d.last_run.run_type;
+    // Update WMAPE gauges
+    renderWmapeGauges(d.last_run.wmape_7d, d.last_run.wmape_30d);
+  }
+  if(d.month_closes?.length) buildMonthChart(d.month_closes);
+  // Cat accuracy persisted via stats endpoint
+  if(d.cat_accuracy && Object.keys(d.cat_accuracy).length) renderCatAccuracy(d.cat_accuracy);
+}
+
+function renderWmapeGauges(w7, w30){
+  const g = document.getElementById('wmape-gauges');
+  if(g) g.style.display = 'grid';
+  const el7  = document.getElementById('wmape-7d');
+  const el30 = document.getElementById('wmape-30d');
+  if(el7)  { el7.textContent  = w7+'%';  el7.style.color  = w7  < 10 ? 'var(--green)' : w7  < 15 ? 'var(--p2)' : 'var(--red)'; }
+  if(el30) { el30.textContent = w30+'%'; el30.style.color = w30 < 12 ? 'var(--green)' : w30 < 18 ? 'var(--p2)' : 'var(--red)'; }
+}
+
+function renderCatAccuracy(ca){
+  const panel = document.getElementById('cat-accuracy-panel');
+  const empty = document.getElementById('cat-acc-empty');
+  if(empty) empty.style.display = 'none';
+  panel.innerHTML = Object.entries(ca).map(([cat,v])=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:.82rem;font-weight:600">${cat}</span>
+      <div style="text-align:right">
+        <div class="mono text-xs">${Math.round(v.forecast).toLocaleString()} → ${Math.round(v.actual).toLocaleString()}</div>
+        <div style="font-size:.72rem;color:${v.wmape<10?'var(--green)':v.wmape<15?'var(--p2)':'var(--red)'};font-family:'DM Mono',monospace">WMAPE ${v.wmape}%</div>
+      </div>
+    </div>`).join('');
+}
+
+// ── Run history — JS re-renders after pipeline run ─────────────
+async function reloadRunHistory(){
+  const d = await apiFetch('/admin/stats');
+  // Fetch full run list
+  const runs = await apiFetch('/admin/ml/runs');
+  if(!runs || !runs.length) return;
+  const tbody = document.getElementById('run-history-tbody');
+  tbody.innerHTML = runs.map(r=>`<tr>
+    <td class="mono text-xs">${r.run_type}</td>
+    <td><span class="badge badge-${r.status}">${r.status}</span></td>
+    <td class="mono text-xs">${r.wmape_7d ? r.wmape_7d+'%' : '—'}</td>
+    <td class="mono text-xs">${r.wmape_30d ? r.wmape_30d+'%' : '—'}</td>
+    <td class="text-dim text-xs mono">${fmtIST(r.started_at)}</td>
+  </tr>`).join('');
+}
+
+// ── Charts ─────────────────────────────────────────────────────
+async function buildCatChart(){
+  const data=await apiFetch('/api/charts/forecast-summary');
+  if(!data.length) return;
+  const ctx=document.getElementById('chart-cat').getContext('2d');
+  if(charts.cat) charts.cat.destroy();
+  charts.cat=new Chart(ctx,{type:'bar',data:{
+    labels:data.map(d=>d.category),
+    datasets:[
+      {label:'7-day', data:data.map(d=>d.forecast_7d), backgroundColor:'rgba(59,130,246,.75)',borderRadius:4},
+      {label:'30-day',data:data.map(d=>d.forecast_30d),backgroundColor:'rgba(16,185,129,.75)',borderRadius:4}
+    ]
+  },options:{...CD,scales:{...CD.scales,y:{...CD.scales.y,title:{display:true,text:'Units',color:'#8892a4'}}}}});
+}
+
+async function loadWhData(){ whData=await apiFetch('/api/charts/forecast-by-warehouse'); buildWhChart(); }
+function buildWhChart(){
+  const filter=document.getElementById('wh-filter').value;
+  const ctx=document.getElementById('chart-wh').getContext('2d');
+  if(charts.wh) charts.wh.destroy();
+  const filtered=filter==='all'?whData:whData.filter(d=>d.category===filter);
+  const byWh={1:{},2:{},3:{}};
+  filtered.forEach(d=>{byWh[d.warehouse_id][d.category]=(byWh[d.warehouse_id][d.category]||0)+d.f30;});
+  const cats=[...new Set(filtered.map(d=>d.category))];
+  const colors={FMCG:'rgba(59,130,246,.75)',Electronics:'rgba(240,165,0,.75)',Clothing:'rgba(139,92,246,.75)'};
+  charts.wh=new Chart(ctx,{type:'bar',data:{
+    labels:['WH-1 North','WH-2 Central','WH-3 South'],
+    datasets:cats.map(cat=>({label:cat,data:[1,2,3].map(wid=>Math.round(byWh[wid][cat]||0)),
+      backgroundColor:colors[cat]||'rgba(255,255,255,.3)',borderRadius:4}))
+  },options:{...CD,scales:{
+    x:{...CD.scales.x,stacked:true},
+    y:{...CD.scales.y,stacked:true,title:{display:true,text:'30d units',color:'#8892a4'}}
+  }}});
+}
+
+async function buildWmapeChart(){
+  const data=await apiFetch('/api/charts/wmape-history');
+  if(!data.length) return;
+  const ctx=document.getElementById('chart-wmape').getContext('2d');
+  if(charts.wmape) charts.wmape.destroy();
+  charts.wmape=new Chart(ctx,{type:'line',data:{
+    labels:data.map(d=>d.label),
+    datasets:[
+      {label:'WMAPE 7d', data:data.map(d=>d.wmape_7d), borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.08)',tension:.35,fill:true,pointRadius:4},
+      {label:'WMAPE 30d',data:data.map(d=>d.wmape_30d),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.08)',tension:.35,fill:true,pointRadius:4}
+    ]
+  },options:{...CD,scales:{...CD.scales,y:{...CD.scales.y,suggestedMin:0,suggestedMax:25,title:{display:true,text:'WMAPE %',color:'#8892a4'}}}}});
+}
+
+function buildMonthChart(closes){
+  document.getElementById('month-chart-empty').style.display='none';
+  document.getElementById('month-chart-wrap').style.display='block';
+  const ctx=document.getElementById('chart-month').getContext('2d');
+  if(charts.month) charts.month.destroy();
+  const wmapes=closes.map(c=>c.wmape);
+  charts.month=new Chart(ctx,{type:'bar',data:{
+    labels:closes.map(c=>c.month_label||c.month),
+    datasets:[{label:'WMAPE %',data:wmapes,
+      backgroundColor:wmapes.map(v=>v<10?'rgba(16,185,129,.7)':v<15?'rgba(240,165,0,.7)':'rgba(239,68,68,.7)'),borderRadius:4}]
+  },options:{...CD,plugins:{legend:{display:false}},scales:{...CD.scales,
+    y:{...CD.scales.y,suggestedMin:0,suggestedMax:25,title:{display:true,text:'WMAPE %',color:'#8892a4'}}}}});
+}
+
+async function loadDrilldown(){
+  const pid=document.getElementById('drill-pid').value;
+  const data=await apiFetch(`/api/charts/forecast-drilldown/${pid}`);
+  const empty=document.getElementById('drill-empty');
+  const wrap=document.getElementById('drill-wrap');
+  if(!data.length){ empty.style.display='block'; wrap.style.display='none'; return; }
+  empty.style.display='none'; wrap.style.display='block';
+  const ctx=document.getElementById('chart-drill').getContext('2d');
+  if(charts.drill) charts.drill.destroy();
+  // Compute varied confidence — normalize per-product so values differ visually
+  const confs = data.map(d=>Math.round(d.confidence*100));
+  charts.drill=new Chart(ctx,{type:'bar',data:{
+    labels:data.map(d=>`WH-${d.warehouse_id}`),
+    datasets:[
+      {label:'7-day', data:data.map(d=>d.forecast_7d), backgroundColor:'rgba(59,130,246,.7)',borderRadius:4},
+      {label:'30-day',data:data.map(d=>d.forecast_30d),backgroundColor:'rgba(16,185,129,.7)',borderRadius:4},
+      {label:'Conf %',data:confs,type:'line',
+       borderColor:'#f0a500',pointRadius:5,fill:false,yAxisID:'y1',tension:.3}
+    ]
+  },options:{...CD,scales:{
+    x:CD.scales.x,
+    y:{...CD.scales.y,title:{display:true,text:'Units',color:'#8892a4'}},
+    y1:{position:'right',min:0,max:100,grid:{display:false},ticks:{color:'#f0a500',font:{size:10}},
+        title:{display:true,text:'Confidence %',color:'#f0a500'}}
+  }}});
+}
+
+// ── Pipeline ───────────────────────────────────────────────────
+async function runPipeline(){
+  const btn=document.getElementById('run-btn'),log=document.getElementById('pipeline-log');
+  const badge=document.getElementById('pipeline-badge'),mode=document.getElementById('run-mode').value;
+  btn.textContent='⏳ Running…'; btn.disabled=true;
+  log.textContent='[ML] Starting pipeline…\n';
+  badge.textContent='running'; badge.className='badge badge-running';
+  try{
+    const d=await apiFetch('/admin/ml/run',{method:'POST',body:JSON.stringify({run_type:mode})});
+    if(d.run_id){
+      log.textContent=d.log||`[ML] Run #${d.run_id} complete\n[ML] WMAPE 7d: ${d.wmape_7d}%  30d: ${d.wmape_30d}%\n`;
+      badge.textContent='complete'; badge.className='badge badge-complete';
+      showToast('Pipeline complete!','success');
+      renderWmapeGauges(d.wmape_7d, d.wmape_30d);
+      if(d.cat_accuracy) renderCatAccuracy(d.cat_accuracy);
+      // Refresh all charts and run history live
+      loadStats(); buildCatChart(); loadWhData(); buildWmapeChart(); loadDrilldown(); reloadRunHistory();
+    } else {
+      log.textContent+=`[ML] ERROR: ${d.error}\n`;
+      badge.textContent='failed'; badge.className='badge badge-failed';
+      showToast('Pipeline failed — '+d.error,'error');
+    }
+  }catch(e){log.textContent+=`[ML] EXCEPTION: ${e}\n`; showToast('Pipeline error','error');}
+  btn.textContent='▶ Run Pipeline'; btn.disabled=false;
+}
+
+// ── Month close ────────────────────────────────────────────────
+function openMonthClose(){
+  const month=new Date().toLocaleString('en-CA',{timeZone:'Asia/Kolkata'}).slice(0,7);
+  openModal('Close Month — '+month,
+    `<p class="text-sm mb-12">Lock forecasts for <strong>${month}</strong> and record actuals.</p>
+     <div class="form-group"><label class="form-label">Notes</label>
+     <textarea class="form-input" id="close-note" rows="2" placeholder="Optional observations…"></textarea></div>`,
+    async()=>{
+      const d=await apiFetch('/admin/month-close',{method:'POST',body:JSON.stringify({month})});
+      closeModal();
+      if(d.error){ showToast('Month close failed: '+d.error,'error'); return; }
+      showToast(`Month ${d.month} closed — WMAPE ${d.wmape}%`,'success');
+      loadStats(); showMonthReport(month);
+    },'Close & Report');
+}
+
+async function showMonthReport(month){
+  const d=await apiFetch(`/api/charts/month-close-detail/${month}`);
+  if(d.error){ showToast('Could not load report: '+d.error,'error'); return; }
+  const rows=(d.by_category||[]).map(c=>`<tr>
+    <td>${c.category}</td>
+    <td class="mono">${Math.round(c.forecast).toLocaleString()}</td>
+    <td class="mono">${Math.round(c.actual).toLocaleString()}</td>
+    <td class="mono" style="color:${c.wmape<10?'var(--green)':c.wmape<15?'var(--p2)':'var(--red)'}">${c.wmape}%</td>
+  </tr>`).join('');
+  openModal(`📅 Report — ${month}`,`
+    <div class="grid-2 mb-12" style="gap:10px;">
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center;">
+        <div class="text-xs text-dim mono">Overall WMAPE</div>
+        <div style="font-family:'Syne',sans-serif;font-size:2rem;font-weight:800;color:${d.wmape<10?'var(--green)':d.wmape<15?'var(--p2)':'var(--red)'}">${d.wmape}%</div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center;">
+        <div class="text-xs text-dim mono">Forecast vs Actual</div>
+        <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;margin-top:8px;">${Math.round(d.total_forecast).toLocaleString()}<span class="text-dim"> → </span>${Math.round(d.total_actual).toLocaleString()}</div>
+      </div>
+    </div>
+    <table class="data-table"><thead><tr><th>Category</th><th>Forecast</th><th>Actual</th><th>WMAPE</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="text-dim" style="text-align:center">No category data</td></tr>'}</tbody></table>`,
+    null,'Done');
+  document.getElementById('modal-confirm').style.display='none';
+}
+
+// ── Add user ───────────────────────────────────────────────────
+function openAddUser(){
+  openModal('Add User',`
+    <div class="form-group"><label class="form-label">Full Name</label><input class="form-input" id="n-name" placeholder="e.g. Priya Sharma"></div>
+    <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="n-user"></div>
+    <div class="form-group"><label class="form-label">Password</label><input class="form-input" type="password" id="n-pass"></div>
+    <div class="form-group"><label class="form-label">Role</label>
+      <select class="form-select" id="n-role">
+        <option value="admin">Admin</option><option value="procurement">Procurement</option>
+        <option value="supplychain">Supply Chain</option><option value="inventory">Inventory</option>
+      </select></div>`,
+    async()=>{
+      const d=await apiFetch('/admin/users',{method:'POST',body:JSON.stringify({
+        full_name:document.getElementById('n-name').value,username:document.getElementById('n-user').value,
+        password:document.getElementById('n-pass').value,role:document.getElementById('n-role').value})});
+      if(d.id){showToast(`User @${d.username} created`,'success');closeModal();setTimeout(()=>location.reload(),800);}
+      else showToast(d.error||'Error','error');
+    },'Create User');
+}
+
+// ── Upload ─────────────────────────────────────────────────────
+const dropZone=document.getElementById('drop-zone');
+const fileInput=document.getElementById('file-input');
+['dragover','dragenter'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.classList.add('drag-over');}));
+['dragleave','drop'].forEach(e=>dropZone.addEventListener(e,ev=>{ev.preventDefault();dropZone.classList.remove('drag-over');if(e==='drop'&&ev.dataTransfer.files[0])uploadFile(ev.dataTransfer.files[0]);}));
+fileInput.addEventListener('change',()=>{if(fileInput.files[0])uploadFile(fileInput.files[0]);});
+
+async function uploadFile(file){
+  const st=document.getElementById('upload-status');
+  st.innerHTML=`<span class="text-xs text-dim mono pulse">Uploading ${file.name}…</span>`;
+  const fd=new FormData(); fd.append('file',file); fd.append('upload_type',document.getElementById('upload-type').value);
+  try{
+    const d=await (await fetch('/admin/upload',{method:'POST',body:fd})).json();
+    if(d.success){st.innerHTML=`<span class="text-xs" style="color:var(--green)">✓ ${d.filename} — ${d.rows} rows</span>`;
+      showToast(`Uploaded ${d.filename} (${d.rows} rows)`,'success'); setTimeout(()=>location.reload(),1500);}
+    else st.innerHTML=`<span class="text-xs" style="color:var(--red)">✗ ${d.error}</span>`;
+  }catch(e){st.innerHTML=`<span class="text-xs" style="color:var(--red)">✗ Upload failed</span>`;}
+}
+
+// ── Engine status banner ───────────────────────────────────────
+async function checkEngineStatus(){
+  try{
+    const d=await apiFetch('/api/ml/engine-status');
+    const dot  =document.getElementById('engine-dot');
+    const label=document.getElementById('engine-label');
+    if(d.real){
+      dot.style.background='var(--green)';
+      label.innerHTML=`<strong style="color:var(--green)">Prophet+LSTM engine active</strong> &nbsp;·&nbsp; prophet ✓ &nbsp; torch ✓`;
+    } else {
+      dot.style.background='var(--p2)';
+      label.innerHTML=`<strong style="color:var(--p2)">Numpy fallback active</strong>
+        &nbsp;·&nbsp; prophet ${d.prophet?'✓':'<span style="color:var(--red)">✗</span>'}
+        &nbsp; torch ${d.torch?'✓':'<span style="color:var(--red)">✗</span>'}`;
+    }
+  }catch(e){}
+}
+function showEngineHelp(){
+  openModal('Activate Prophet+LSTM Engine',
+    `<p style="font-size:.83rem;color:var(--text2);line-height:1.8;margin-bottom:12px;">
+      Runs the exact model from <strong>ProphetLSTM_Colab.ipynb</strong>:<br>
+      Prophet (piecewise trend · Fourier seasonality · promo regressor)<br>
+      + PyTorch LSTM (hidden=64 · layers=2 · autoregressive · GPU-ready)
+    </p>
+    <div style="background:var(--bg3);border-radius:6px;padding:12px;font-family:'DM Mono',monospace;font-size:.75rem;color:var(--green);">
+      pip install prophet torch pandas
+    </div>
+    <p style="font-size:.75rem;color:var(--text3);margin-top:10px;">
+      For GPU (Colab):<br>
+      <span style="font-family:'DM Mono',monospace;">pip install torch --index-url https://download.pytorch.org/whl/cu121</span>
+    </p>
+    <p style="font-size:.75rem;color:var(--text3);margin-top:8px;">Restart server after installing — engine activates automatically.</p>`,
+    ()=>closeModal(),'Got it');
+}
+
+// ── Init ───────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded',()=>{
+  loadStats(); buildCatChart(); loadWhData(); buildWmapeChart(); loadDrilldown();
+  checkEngineStatus();
+  // Also try to reload run history from API if endpoint exists
+  reloadRunHistory();
+});
+</script>
+{% endblock %}

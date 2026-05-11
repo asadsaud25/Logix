@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% block title %}Inventory — Intelligent Platform{% endblock %}
+{% block page_title %}Inventory Dashboard{% endblock %}
+{% block breadcrumb %}Kabir · Stock Alerts · Rebalancing · Simulation{% endblock %}
+{% block content %}
+
+<div class="stat-grid stat-grid-4 mb-16">
+  <div class="stat-card" style="--accent-color:var(--red)">
+    <div class="stat-label">P1 Critical</div>
+    <div class="stat-value" id="s-p1">{{ alerts | selectattr('severity','eq','P1') | list | length }}</div><div class="stat-icon">🚨</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--p2)">
+    <div class="stat-label">P2 Warning</div>
+    <div class="stat-value" id="s-p2">{{ alerts | selectattr('severity','eq','P2') | list | length }}</div><div class="stat-icon">⚠️</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--green)">
+    <div class="stat-label">Service Level (sim)</div>
+    <div class="stat-value" id="s-sl">—</div><div class="stat-icon">📦</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--blue)">
+    <div class="stat-label">Pending Approvals</div>
+    <div class="stat-value" id="s-pend">{{ recs | selectattr('status','eq','pending') | list | length }}</div><div class="stat-icon">💡</div>
+  </div>
+</div>
+
+<!-- Alerts + Heatmap -->
+<div class="grid-2-1 mb-16">
+  <div class="card" id="stock">
+    <div class="card-header">
+      <div><div class="card-title">📊 Stock Status Heatmap</div>
+        <div class="card-subtitle">Days of cover · Products × Warehouses</div></div>
+      <div class="flex gap-8"><a href="/export/stock-status" class="btn btn-export btn-sm">⬇ CSV</a><button class="btn btn-ghost btn-sm" onclick="loadStock()">↻</button></div>
+    </div>
+    <div id="stock-heatmap" style="overflow-x:auto;"></div>
+    <div class="flex gap-12 mt-8" style="flex-wrap:wrap;">
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:12px;height:12px;background:rgba(239,68,68,.6);border-radius:2px;display:inline-block;"></span>Critical (&lt;3d)
+      </span>
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:12px;height:12px;background:rgba(240,165,0,.5);border-radius:2px;display:inline-block;"></span>Low (3–7d)
+      </span>
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:12px;height:12px;background:rgba(16,185,129,.5);border-radius:2px;display:inline-block;"></span>OK (&gt;7d) &nbsp; 🔥=Fast &nbsp; 👻=Ghost
+      </span>
+    </div>
+    <div class="chart-wrap mt-16"><canvas id="chart-cover"></canvas></div>
+  </div>
+
+  <div class="card" id="alerts">
+    <div class="card-header">
+      <div><div class="card-title">🔔 Alerts</div>
+        <div class="card-subtitle">Live · cross-role notifications</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="loadAlerts()">↻</button>
+    </div>
+    <div id="alerts-list">
+      {% for a in alerts %}
+      <div class="alert-item {{ 'p1' if a.severity=='P1' else 'p2' if a.severity=='P2' else 'p3' }} unread" id="alert-{{ a.id }}">
+        <div class="flex-between" style="gap:6px;">
+          <div style="flex:1">
+            <div class="alert-title">{{ '🚨' if a.severity=='P1' else '⚠️' if a.severity=='P2' else 'ℹ️' }} {{ a.title }}
+              {% if a.source_role %}<span style="font-size:.65rem;color:var(--p2);font-family:'DM Mono',monospace;"> [{{ a.source_role }}]</span>{% endif %}
+            </div>
+            <div class="alert-body">{{ a.body }}</div>
+            <div class="alert-meta">{{ a.created_at | fmtdate }}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+            <span class="badge badge-{{ a.severity.lower() }}">{{ a.severity }}</span>
+            {% if not a.is_read %}<button class="btn btn-ghost btn-sm" onclick="markRead({{ a.id }})">✓</button>{% endif %}
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="text-dim text-xs" style="text-align:center;padding:24px;" id="no-alerts-msg">✅ No unread alerts</div>
+      {% endfor %}
+    </div>
+    <!-- Alert type breakdown chart -->
+    <div class="mt-16"><div class="card-title text-sm mb-8">Alert Breakdown</div>
+      <div class="chart-wrap"><canvas id="chart-alert-breakdown"></canvas></div></div>
+  </div>
+</div>
+
+<!-- Simulation charts -->
+<div class="grid-2 mb-16">
+  <div class="card">
+    <div class="card-header"><div><div class="card-title">📈 90-Day Simulation — Service Level</div>
+      <div class="card-subtitle">(s,Q) reorder policy · daily log</div></div></div>
+    <div class="chart-wrap"><canvas id="chart-sl"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">💰 Simulation — Daily Costs</div></div>
+    <div class="chart-wrap"><canvas id="chart-cost"></canvas></div>
+    <div id="sim-kpis" class="mt-12" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;"></div>
+  </div>
+</div>
+
+<!-- Velocity scatter + Recommendations -->
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header"><div class="card-title">⚡ Velocity Analysis</div>
+      <div class="card-subtitle">Actual vs forecast sell-rate · fast-movers & ghost inventory</div></div>
+    <div class="chart-wrap"><canvas id="chart-velocity"></canvas></div>
+    <div class="mt-8 flex gap-12">
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:8px;height:8px;background:#10b981;border-radius:50%;display:inline-block;"></span>OK
+      </span>
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;"></span>Fast-mover
+      </span>
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px;">
+        <span style="width:8px;height:8px;background:#3b82f6;border-radius:50%;display:inline-block;"></span>Ghost
+      </span>
+    </div>
+  </div>
+
+  <div class="card" id="recommendations">
+    <div class="card-header">
+      <div><div class="card-title">💡 Rebalancing Recommendations</div>
+        <div class="card-subtitle">LP-computed transfers · approve or modify</div></div>
+      <select class="form-select" id="inv-filter" onchange="loadRecs()" style="width:110px;padding:5px 8px;font-size:.75rem;">
+        <option value="pending" selected>Pending</option><option value="">All</option>
+        <option value="approved">Approved</option><option value="rejected">Rejected</option>
+      </select>
+    </div>
+    <div id="inv-recs-list" style="max-height:420px;overflow-y:auto;"><div class="text-dim text-xs" style="text-align:center;padding:24px;">Loading…</div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const CD={responsive:true,maintainAspectRatio:true,
+  plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}},
+  scales:{x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}}}};
+const charts={};
+
+window.addEventListener('DOMContentLoaded',()=>{ loadStock(); loadAlerts(); loadRecs(); loadSimulation(); loadVelocity(); buildAlertChart(); });
+
+// ── Heatmap ────────────────────────────────────────────────────
+async function loadStock(){
+  const stocks=await apiFetch('/inventory/stock-status');
+  const byKey={};
+  stocks.forEach(s=>byKey[`${s.product_id}-${s.warehouse_id}`]=s);
+  let html=`<table class="data-table" style="font-size:.7rem;">
+    <thead><tr><th>Product</th><th style="text-align:center;">WH-1 North</th><th style="text-align:center;">WH-2 Central</th><th style="text-align:center;">WH-3 South</th></tr></thead><tbody>`;
+  for(let pid=1;pid<=20;pid++){
+    html+=`<tr><td class="mono">P-${pid}</td>`;
+    for(let wid=1;wid<=3;wid++){
+      const s=byKey[`${pid}-${wid}`];
+      if(!s){html+=`<td>—</td>`;continue;}
+      const bg=s.status==='critical'?'rgba(239,68,68,.55)':s.status==='low'?'rgba(240,165,0,.45)':'rgba(16,185,129,.35)';
+      const vel=s.velocity>2.0?'🔥':s.velocity<0.4?'👻':'';
+      html+=`<td style="text-align:center;background:${bg};border-radius:3px;padding:4px 3px;">
+        <span class="mono" style="font-size:.68rem;" title="${s.stock} units · ${s.daily_rate}/day">${s.days_cover}d</span>
+        <span>${vel}</span></td>`;
+    }
+    html+=`</tr>`;
+  }
+  html+=`</tbody></table>`;
+  document.getElementById('stock-heatmap').innerHTML=html;
+  buildCoverChart(stocks);
+}
+
+function buildCoverChart(stocks){
+  const ctx=document.getElementById('chart-cover').getContext('2d');
+  if(charts.cover) charts.cover.destroy();
+  const labels=Array.from({length:20},(_,i)=>`P-${i+1}`);
+  const ds=[1,2,3].map((wid,i)=>({
+    label:`WH-${wid}`,borderRadius:2,
+    backgroundColor:['rgba(59,130,246,.7)','rgba(16,185,129,.7)','rgba(240,165,0,.7)'][i],
+    data:stocks.filter(s=>s.warehouse_id===wid).map(s=>s.days_cover)
+  }));
+  charts.cover=new Chart(ctx,{type:'bar',data:{labels,datasets:ds},
+    options:{...CD,scales:{x:CD.scales.x,y:{...CD.scales.y,title:{display:true,text:'Days of Cover',color:'#8892a4'}}}}});
+}
+
+// ── Alerts ─────────────────────────────────────────────────────
+async function loadAlerts(){
+  const alerts=await apiFetch('/inventory/alerts');
+  const unread=alerts.filter(a=>!a.is_read);
+  document.getElementById('s-p1').textContent=unread.filter(a=>a.severity==='P1').length;
+  document.getElementById('s-p2').textContent=unread.filter(a=>a.severity==='P2').length;
+  const list=document.getElementById('alerts-list');
+  if(!alerts.length){list.innerHTML=`<div class="text-dim text-xs" style="text-align:center;padding:24px;">✅ No alerts</div>`;return;}
+  list.innerHTML=alerts.map(a=>{
+    const sev=a.severity.toLowerCase();
+    const icon=a.severity==='P1'?'🚨':a.severity==='P2'?'⚠️':'ℹ️';
+    const src=a.source_role?` <span style="font-size:.65rem;color:var(--p2);font-family:'DM Mono',monospace;">[${a.source_role}]</span>`:'';
+    return `<div class="alert-item ${sev} ${a.is_read?'':'unread'}" id="alert-${a.id}">
+      <div class="flex-between" style="gap:6px;">
+        <div style="flex:1">
+          <div class="alert-title">${icon} ${a.title}${src}</div>
+          <div class="alert-body">${a.body}</div>
+          <div class="alert-meta">${fmtIST(a.created_at)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+          ${severityBadge(a.severity)}
+          ${!a.is_read?`<button class="btn btn-ghost btn-sm" onclick="markRead(${a.id})">✓</button>`:''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function markRead(id){
+  await apiFetch(`/inventory/alerts/${id}/read`,{method:'POST',body:'{}'});
+  const el=document.getElementById(`alert-${id}`);
+  if(el) el.classList.remove('unread');
+  showToast('Marked as read','success'); refreshBell();
+}
+
+// ── Alert breakdown chart ──────────────────────────────────────
+async function buildAlertChart(){
+  const data=await apiFetch('/api/charts/alert-breakdown');
+  if(!data.length) return;
+  const ctx=document.getElementById('chart-alert-breakdown').getContext('2d');
+  if(charts.ab) charts.ab.destroy();
+  // Group by type
+  const byType={};
+  data.forEach(d=>{ byType[d.alert_type]=(byType[d.alert_type]||0)+d.cnt; });
+  const typeColors={stockout:'#ef4444',fast_mover:'#f0a500',ghost:'#3b82f6',reorder:'#10b981',disruption:'#8b5cf6'};
+  charts.ab=new Chart(ctx,{type:'doughnut',data:{
+    labels:Object.keys(byType).map(t=>t.replace('_',' ')),
+    datasets:[{data:Object.values(byType),
+      backgroundColor:Object.keys(byType).map(t=>typeColors[t]||'#888'),borderWidth:0,hoverOffset:6}]
+  },options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}}}});
+}
+
+// ── Simulation ─────────────────────────────────────────────────
+async function loadSimulation(){
+  const d=await apiFetch('/api/charts/inventory-simulation');
+  if(d.error||!d.daily_log) return;
+  const log=d.daily_log;
+  document.getElementById('s-sl').textContent=Math.round(d.service_level*100)+'%';
+
+  // Service level line
+  const ctxSL=document.getElementById('chart-sl').getContext('2d');
+  if(charts.sl) charts.sl.destroy();
+  const every3=log.filter((_,i)=>i%3===0);
+  charts.sl=new Chart(ctxSL,{type:'line',data:{
+    labels:every3.map(d=>'D'+d.day),
+    datasets:[{label:'Service Level %',data:every3.map(d=>Math.round(d.service_level*100)),
+      borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.08)',tension:.35,fill:true,pointRadius:2}]
+  },options:{...CD,scales:{...CD.scales,y:{...CD.scales.y,suggestedMin:0,suggestedMax:105,
+    title:{display:true,text:'Service Level %',color:'#8892a4'}}}}});
+
+  // Stacked cost line
+  const ctxC=document.getElementById('chart-cost').getContext('2d');
+  if(charts.simcost) charts.simcost.destroy();
+  charts.simcost=new Chart(ctxC,{type:'line',data:{
+    labels:every3.map(d=>'D'+d.day),
+    datasets:[
+      {label:'Holding',  data:every3.map(d=>Math.round(d.holding)),   borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.08)', tension:.3,fill:true,pointRadius:0},
+      {label:'Stockout', data:every3.map(d=>Math.round(d.stockout)),  borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.08)',  tension:.3,fill:true,pointRadius:0},
+    ]
+  },options:{...CD,scales:{...CD.scales,y:{...CD.scales.y,title:{display:true,text:'₹/day',color:'#8892a4'}}}}});
+
+  // KPI mini cards
+  document.getElementById('sim-kpis').innerHTML=[
+    ['Service Level', Math.round(d.service_level*100)+'%','var(--green)'],
+    ['On-Time Rate',  Math.round(d.on_time_rate*100)+'%','var(--blue)'],
+    ['Total Cost',    '₹'+Math.round(d.total_cost).toLocaleString(),'var(--p2)'],
+  ].map(([lbl,val,c])=>`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+    <div style="font-size:.68rem;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;">${lbl}</div>
+    <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:800;color:${c};margin-top:4px;">${val}</div>
+  </div>`).join('');
+}
+
+// ── Velocity scatter ───────────────────────────────────────────
+async function loadVelocity(){
+  const stocks=await apiFetch('/inventory/stock-status');
+  const ctx=document.getElementById('chart-velocity').getContext('2d');
+  if(charts.vel) charts.vel.destroy();
+  const fast=stocks.filter(s=>s.velocity>2.0);
+  const ghost=stocks.filter(s=>s.velocity<0.4);
+  const ok   =stocks.filter(s=>s.velocity>=0.4&&s.velocity<=2.0);
+  charts.vel=new Chart(ctx,{type:'scatter',data:{datasets:[
+    {label:'OK',    data:ok.map(s=>({x:s.days_cover,y:s.velocity,r:4})),   backgroundColor:'rgba(16,185,129,.65)',pointRadius:5},
+    {label:'Fast',  data:fast.map(s=>({x:s.days_cover,y:s.velocity,r:4})), backgroundColor:'rgba(239,68,68,.75)', pointRadius:7},
+    {label:'Ghost', data:ghost.map(s=>({x:s.days_cover,y:s.velocity,r:4})),backgroundColor:'rgba(59,130,246,.65)',pointRadius:5},
+  ]},options:{...CD,scales:{
+    x:{...CD.scales.x,title:{display:true,text:'Days of Cover',color:'#8892a4'}},
+    y:{...CD.scales.y,title:{display:true,text:'Velocity Ratio',color:'#8892a4'}}
+  }}});
+}
+
+// ── Recommendations ────────────────────────────────────────────
+async function loadRecs(){
+  const status=document.getElementById('inv-filter').value;
+  const url=`/inventory/recommendations${status?'?status='+status:''}`;
+  const recs=await apiFetch(url);
+  const all=await apiFetch('/inventory/recommendations');
+  document.getElementById('s-pend').textContent=all.filter(r=>r.status==='pending').length;
+  const list=document.getElementById('inv-recs-list');
+  if(!recs.length){list.innerHTML=`<div class="text-dim text-xs" style="text-align:center;padding:24px;">No recommendations</div>`;return;}
+  list.innerHTML=recs.map(r=>{
+    const d=r.detail||{};
+    const decided=r.status!=='pending';
+    return `<div class="rec-card" id="rec-${r.id}">
+      <div class="rec-header">
+        <div style="flex:1"><div class="rec-title">${r.title}</div>
+          <div class="rec-conf flex gap-8 mt-4">${severityBadge(r.priority)} ${statusBadge(r.status)}</div></div>
+      </div>
+      <div class="rec-detail mt-8">
+        ${d.qty?`Transfer <strong>${d.qty.toLocaleString()}</strong> units WH-${d.from_wh} → WH-${d.to_wh} · cost ₹${(d.cost||0).toLocaleString()}`:''}
+        ${d.recommended_extra_safety_days?`Add <strong>+${d.recommended_extra_safety_days}d</strong> safety stock`:''}
+        ${d.velocity_to?`<span class="text-dim"> · dest velocity ${d.velocity_to}×</span>`:''}
+        ${d.reason==='route_disruption'?`<div style="color:var(--p2);font-size:.75rem;margin-top:4px;">⚠️ Route disruption from Anjali</div>`:''}
+      </div>
+      ${confBar(r.confidence)}
+      ${!decided?`<div class="rec-actions mt-8">
+        <button class="btn btn-approve btn-sm" onclick="decideRec(${r.id},'approved','inventory')">✓ Approve</button>
+        <button class="btn btn-modify btn-sm"  onclick="decideRec(${r.id},'modified','inventory')">✎ Modify</button>
+        <button class="btn btn-reject btn-sm"  onclick="decideRec(${r.id},'rejected','inventory')">✗ Reject</button>
+      </div>`:r.decision_note?`<div class="mt-8 text-xs text-dim">📝 ${r.decision_note}</div>`:''}
+    </div>`;
+  }).join('');
+}
+</script>
+{% endblock %}

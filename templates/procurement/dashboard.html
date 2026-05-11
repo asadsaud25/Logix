@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Procurement — Intelligent Platform{% endblock %}
+{% block page_title %}Procurement Dashboard{% endblock %}
+{% block breadcrumb %}Vikram · Supplier Scoring · Order Optimisation{% endblock %}
+{% block content %}
+
+<div class="stat-grid stat-grid-4 mb-16">
+  <div class="stat-card" style="--accent-color:var(--procurement)">
+    <div class="stat-label">Pending</div><div class="stat-value" id="s-pend">—</div><div class="stat-icon">💡</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--green)">
+    <div class="stat-label">Approved</div><div class="stat-value" id="s-appr">—</div><div class="stat-icon">✅</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--red)">
+    <div class="stat-label">Rejected</div><div class="stat-value" id="s-rej">—</div><div class="stat-icon">✗</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--blue)">
+    <div class="stat-label">Top Supplier Score</div><div class="stat-value" id="s-top">—</div><div class="stat-icon">🏆</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-16">
+  <!-- Recommendations -->
+  <div class="card" id="recommendations">
+    <div class="card-header">
+      <div><div class="card-title">💡 Order Recommendations</div>
+        <div class="card-subtitle">LP-optimised splits · human approval required</div></div>
+      <div class="flex gap-8">
+        <select class="form-select" id="rec-filter" onchange="loadRecs()" style="width:110px;padding:5px 8px;font-size:.75rem;">
+          <option value="pending" selected>Pending</option><option value="">All</option>
+          <option value="approved">Approved</option><option value="rejected">Rejected</option><option value="modified">Modified</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="loadRecs()">↻</button>
+      </div>
+    </div>
+    <div id="recs-list" style="max-height:420px;overflow-y:auto;"><div class="text-dim text-xs" style="text-align:center;padding:24px;">Loading…</div></div>
+  </div>
+
+  <!-- Supplier panel -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card" id="suppliers">
+      <div class="card-header"><div><div class="card-title">🏭 Supplier ML Scores</div>
+        <div class="card-subtitle">GradientBoosting · 2,000 transactions</div></div></div>
+      <div id="supplier-list"></div>
+    </div>
+    <!-- Feature importance -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Score Feature Importance</div></div>
+      <div class="chart-wrap"><canvas id="chart-feat"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="grid-3 mb-16">
+  <div class="card">
+    <div class="card-header"><div class="card-title">🌐 Supplier Radar</div><div class="card-subtitle">Multi-dimension comparison</div></div>
+    <div class="chart-wrap"><canvas id="chart-radar"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">📦 Order Volume by Supplier</div></div>
+    <div class="chart-wrap"><canvas id="chart-vol"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><div class="card-title">💰 Cost Distribution</div></div>
+    <div class="chart-wrap"><canvas id="chart-cost"></canvas></div>
+  </div>
+</div>
+
+<!-- Audit trail -->
+<div class="card" id="audit">
+  <div class="card-header">
+    <div><div class="card-title">📋 Audit Trail</div><div class="card-subtitle">Every decision timestamped</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="loadAudit()">↻</button>
+  </div>
+  <table class="data-table">
+    <thead><tr><th>Recommendation</th><th>Decision</th><th>Confidence</th><th>Note</th><th>When</th></tr></thead>
+    <tbody id="audit-tbody"><tr><td colspan="5" class="text-dim" style="text-align:center;padding:16px;">Loading…</td></tr></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const CD={responsive:true,maintainAspectRatio:true,
+  plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}},
+  scales:{x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}}}};
+const charts={};
+
+window.addEventListener('DOMContentLoaded',()=>{ loadRecs(); loadSuppliers(); loadAudit(); });
+
+async function loadRecs(){
+  const status=document.getElementById('rec-filter').value;
+  const all  =await apiFetch('/procurement/recommendations');
+  document.getElementById('s-pend').textContent = all.filter(r=>r.status==='pending').length;
+  document.getElementById('s-appr').textContent = all.filter(r=>r.status==='approved').length;
+  document.getElementById('s-rej').textContent  = all.filter(r=>r.status==='rejected').length;
+
+  const shown=status?all.filter(r=>r.status===status):all;
+  const list=document.getElementById('recs-list');
+  if(!shown.length){list.innerHTML=`<div class="text-dim text-xs" style="text-align:center;padding:24px;">No recommendations${status?' with status "'+status+'"':''}</div>`;return;}
+  list.innerHTML=shown.map(r=>{
+    const d=r.detail||{};
+    const decided=r.status!=='pending';
+    const bestS=SUPPLIER_NAMES[d.recommended_supplier]||`Supplier ${d.recommended_supplier}`;
+    return `<div class="rec-card" id="rec-${r.id}">
+      <div class="rec-header">
+        <div style="flex:1">
+          <div class="rec-title">${r.title}</div>
+          <div class="rec-conf flex gap-8 mt-4">${severityBadge(r.priority)} ${statusBadge(r.status)}</div>
+        </div>
+      </div>
+      <div class="rec-detail mt-8" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;">
+          <div class="text-xs text-dim mono">30d Demand</div>
+          <div style="font-weight:700;font-size:.9rem;margin-top:2px;">${(d.demand_30d||0).toLocaleString()}</div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;">
+          <div class="text-xs text-dim mono">Best Supplier</div>
+          <div style="font-weight:700;font-size:.82rem;margin-top:2px;color:var(--green)">${bestS}</div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;">
+          <div class="text-xs text-dim mono">Cost Saving</div>
+          <div style="font-weight:700;font-size:.9rem;margin-top:2px;color:var(--green)">↓${d.cost_saving_pct||0}%</div>
+        </div>
+      </div>
+      ${confBar(r.confidence)}
+      ${!decided?`<div class="rec-actions mt-8">
+        <button class="btn btn-approve btn-sm" onclick="decideRec(${r.id},'approved','procurement')">✓ Approve</button>
+        <button class="btn btn-modify btn-sm"  onclick="decideRec(${r.id},'modified','procurement')">✎ Modify</button>
+        <button class="btn btn-reject btn-sm"  onclick="decideRec(${r.id},'rejected','procurement')">✗ Reject</button>
+      </div>`:r.decision_note?`<div class="mt-8 text-xs text-dim">📝 ${r.decision_note}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+const SUPPLIER_NAMES={1:'Noida',2:'Pune',3:'Chennai',4:'Surat',5:'Kolkata'};
+const SUPPLIER_COLORS=['#3b82f6','#10b981','#f0a500','#ef4444','#8b5cf6'];
+
+async function loadSuppliers(){
+  const d=await apiFetch('/api/charts/supplier-performance');
+  const sups=d.suppliers||[];
+  document.getElementById('s-top').textContent=Math.max(...sups.map(s=>s.score)).toFixed(0);
+
+  // Scorecard list
+  document.getElementById('supplier-list').innerHTML=sups.map((s,i)=>{
+    const c=s.score>=80?'var(--green)':s.score>=65?'var(--p2)':'var(--red)';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
+      <div style="width:10px;height:10px;border-radius:50%;background:${SUPPLIER_COLORS[i]};flex-shrink:0;"></div>
+      <div style="flex:1">
+        <div style="font-size:.82rem;font-weight:600;">${s.name}</div>
+        <div style="font-size:.7rem;color:var(--text3);font-family:'DM Mono',monospace;">OTD ${Math.round(s.reliability*100)}% · Fill ${Math.round(s.fill_mean*100)}% · LT ${s.avg_lt}d</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:800;color:${c}">${s.score.toFixed(0)}</div>
+        <div style="font-size:.65rem;color:var(--text3)">/100</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  buildRadarChart(sups);
+  buildFeatChart(d.feature_importances||{});
+  buildVolAndCostCharts();
+}
+
+function buildRadarChart(sups){
+  const ctx=document.getElementById('chart-radar').getContext('2d');
+  if(charts.radar) charts.radar.destroy();
+  charts.radar=new Chart(ctx,{type:'radar',data:{
+    labels:['Score','On-Time','Fill Rate','Price Comp.','Capacity'],
+    datasets:sups.map((s,i)=>({
+      label:s.name.replace('Factory ',''),
+      data:[s.score,Math.round(s.reliability*100),Math.round(s.fill_mean*100),
+            Math.round((1-s.price_mult+0.5)*100),Math.round(s.capacity/20)],
+      borderColor:SUPPLIER_COLORS[i],backgroundColor:SUPPLIER_COLORS[i].replace(')',', .07)').replace('rgb','rgba'),
+      borderWidth:1.5,pointRadius:3
+    }))
+  },options:{responsive:true,maintainAspectRatio:true,
+    scales:{r:{grid:{color:'rgba(255,255,255,.06)'},ticks:{color:'#8892a4',font:{size:9},backdropColor:'transparent'},
+               pointLabels:{color:'#8892a4',font:{size:10}}}},
+    plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}}}});
+}
+
+function buildFeatChart(fi){
+  const ctx=document.getElementById('chart-feat').getContext('2d');
+  if(charts.feat) charts.feat.destroy();
+  const labels=Object.keys(fi).map(k=>k.replace('avg_','').replace('_',' '));
+  const vals=Object.values(fi).map(v=>Math.round(v*100));
+  charts.feat=new Chart(ctx,{type:'bar',data:{
+    labels,datasets:[{label:'Importance',data:vals,
+      backgroundColor:vals.map((_,i)=>SUPPLIER_COLORS[i%5]+'cc'),borderRadius:4}]
+  },options:{...CD,indexAxis:'y',plugins:{legend:{display:false}},
+    scales:{x:{...CD.scales.x,title:{display:true,text:'Importance %',color:'#8892a4'}},y:CD.scales.y}}});
+}
+
+async function buildVolAndCostCharts(){
+  const d=await apiFetch('/api/charts/procurement-summary');
+  const by=d.by_supplier||[];
+  if(!by.length) return;
+  const labels=by.map(s=>s.name.replace('Factory ',''));
+
+  const ctxV=document.getElementById('chart-vol').getContext('2d');
+  if(charts.vol) charts.vol.destroy();
+  charts.vol=new Chart(ctxV,{type:'doughnut',data:{
+    labels,datasets:[{data:by.map(s=>s.total_units),
+      backgroundColor:SUPPLIER_COLORS,borderWidth:0,hoverOffset:6}]
+  },options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}}}});
+
+  const ctxC=document.getElementById('chart-cost').getContext('2d');
+  if(charts.cost) charts.cost.destroy();
+  charts.cost=new Chart(ctxC,{type:'bar',data:{
+    labels,datasets:[{label:'Total Cost (₹)',data:by.map(s=>Math.round(s.total_cost)),
+      backgroundColor:SUPPLIER_COLORS.map(c=>c+'cc'),borderRadius:4}]
+  },options:{...CD,plugins:{legend:{display:false}},
+    scales:{x:CD.scales.x,y:{...CD.scales.y,title:{display:true,text:'₹',color:'#8892a4'}}}}});
+}
+
+async function loadAudit(){
+  const rows=await apiFetch('/procurement/audit');
+  const tbody=document.getElementById('audit-tbody');
+  if(!rows.length){tbody.innerHTML=`<tr><td colspan="5" class="text-dim" style="text-align:center;padding:20px;">No decisions yet</td></tr>`;return;}
+  tbody.innerHTML=rows.map(r=>`<tr>
+    <td style="font-size:.82rem;font-weight:500;">${r.title}</td>
+    <td>${statusBadge(r.status)}</td>
+    <td>${confBar(r.confidence)}</td>
+    <td class="text-xs text-dim">${r.decision_note||'—'}</td>
+    <td class="mono text-xs text-dim">${r.decided_at?fmtIST(r.decided_at):'—'}</td>
+  </tr>`).join('');
+}
+</script>
+{% endblock %}

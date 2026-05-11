@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Intelligent Platform — Sign In</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-bg-grid"></div>
+
+  <div class="login-card">
+    <div class="login-logo">⚡ <span>Intelligent</span> Platform</div>
+    <div class="login-sub">Supply Chain Intelligence System</div>
+
+    {% for msg in get_flashed_messages(category_filter=['error']) %}
+    <div class="login-error">{{ msg }}</div>
+    {% endfor %}
+
+    <form method="POST" action="{{ url_for('login') }}">
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input class="form-input" type="text" name="username"
+               placeholder="Enter your username" autofocus autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" type="password" name="password"
+               placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary w-full mt-12" type="submit"
+              style="justify-content:center;padding:10px;">
+        Sign In →
+      </button>
+    </form>
+
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+      <div class="text-xs text-dim" style="margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:.06em;text-transform:uppercase;">Demo Accounts</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        {% for u,r,c in [('admin','Admin','#8b5cf6'),('vikram','Procurement','#3b82f6'),
+                          ('anjali','Supply Chain','#f0a500'),('kabir','Inventory','#10b981')] %}
+        <button onclick="fillLogin('{{u}}','{{u}}123')"
+                style="background:rgba(255,255,255,0.03);border:1px solid var(--border);
+                       border-radius:6px;padding:7px 10px;text-align:left;cursor:pointer;
+                       transition:border-color .15s;"
+                onmouseover="this.style.borderColor='{{c}}'"
+                onmouseout="this.style.borderColor='var(--border)'">
+          <div style="font-size:.72rem;font-weight:600;color:{{c}}">{{r}}</div>
+          <div style="font-size:.68rem;color:var(--text3);font-family:'DM Mono',monospace;">{{u}} / {{u}}123</div>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function fillLogin(u,p) {
+  document.querySelector('[name=username]').value = u;
+  document.querySelector('[name=password]').value = p;
+}
+</script>
+</body>
+</html>

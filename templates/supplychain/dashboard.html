@@ -1,0 +1,497 @@
+{% extends "base.html" %}
+{% block title %}Supply Chain — Intelligent Platform{% endblock %}
+{% block page_title %}Supply Chain Dashboard{% endblock %}
+{% block breadcrumb %}Anjali · Route Network · Disruption Response{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endblock %}
+{% block content %}
+
+<div class="stat-grid stat-grid-4 mb-16">
+  <div class="stat-card" style="--accent-color:var(--supplychain)">
+    <div class="stat-label">Active Disruptions</div>
+    <div class="stat-value" id="s-dis">{{ route_events|length }}</div><div class="stat-icon">⚠️</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--blue)">
+    <div class="stat-label">Network Nodes</div>
+    <div class="stat-value">14</div><div class="stat-icon">🗺️</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--green)">
+    <div class="stat-label">Pending Reroutes</div>
+    <div class="stat-value" id="s-rr">{{ recs|length }}</div><div class="stat-icon">🔄</div>
+  </div>
+  <div class="stat-card" style="--accent-color:var(--red)">
+    <div class="stat-label">Unread Alerts</div>
+    <div class="stat-value" id="s-alerts">{{ alerts|length }}</div><div class="stat-icon">🔔</div>
+  </div>
+</div>
+
+<div class="grid-2-1 mb-16">
+  <!-- Map -->
+  <div class="card" id="network">
+    <div class="card-header">
+      <div><div class="card-title">🗺️ India Logistics Network</div>
+        <div class="card-subtitle">Live route status · disruptions highlighted</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="refreshNetwork()">↻</button>
+    </div>
+    <div id="network-map"></div>
+    <div class="mt-8 flex gap-12" style="flex-wrap:wrap;">
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;color:var(--text3);">🟣 Supplier · 🔵 FC · 🟢 Hub · 🔴 WH</span>
+      <span style="font-size:.7rem;font-family:'DM Mono',monospace;color:var(--text3);margin-left:auto;">
+        <span style="color:var(--blue)">━</span> Normal &nbsp; <span style="color:var(--red)">┅</span> Disrupted
+      </span>
+    </div>
+  </div>
+
+  <!-- Log event + Active events -->
+  <div style="display:flex;flex-direction:column;gap:14px;">
+    <div class="card">
+      <div class="card-header"><div><div class="card-title">⚠️ Log Route Event</div>
+        <div class="card-subtitle">Block · cost override · delay</div></div></div>
+      <div class="form-group">
+        <label class="form-label">Segment</label>
+        <select class="form-select" id="evt-seg">
+          <option value="FC_DELHI-FC_CHENNAI">FC Delhi → FC Chennai</option>
+          <option value="FC_DELHI-FC_MUMBAI">FC Delhi → FC Mumbai</option>
+          <option value="FC_MUMBAI-FC_CHENNAI">FC Mumbai → FC Chennai</option>
+          <option value="SUP_1-FC_DELHI">Factory Noida → FC Delhi</option>
+          <option value="SUP_5-FC_DELHI">Factory Kolkata → FC Delhi</option>
+          <option value="SUP_2-FC_MUMBAI">Factory Pune → FC Mumbai</option>
+        </select>
+      </div>
+      <div class="grid-2" style="gap:8px;">
+        <div class="form-group">
+          <label class="form-label">Mode</label>
+          <select class="form-select" id="evt-mode">
+            <option value="rail">🚂 Rail</option><option value="road_truck">🚛 Road</option>
+            <option value="air_cargo">✈️ Air</option><option value="sea_vessel">🚢 Sea</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Event Type</label>
+          <select class="form-select" id="evt-type" onchange="toggleCostField()">
+            <option value="blocked">🚫 Blocked</option>
+            <option value="cost_override">💰 Cost Override</option>
+            <option value="delay">⏱️ Delay</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group hidden" id="cost-field">
+        <label class="form-label">New Cost (₹/km)</label>
+        <input class="form-input" id="evt-cost" type="number" placeholder="e.g. 2.5">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Reason</label>
+        <input class="form-input" id="evt-reason" placeholder="e.g. Monsoon flooding on NH-44">
+      </div>
+      <button class="btn btn-primary w-full" onclick="logEvent()" style="justify-content:center;">Log Event & Compute Reroute</button>
+      <div id="reroute-result" class="mt-8 hidden"></div>
+    </div>
+
+    <div class="card" id="events">
+      <div class="card-header"><div class="card-title">📌 Active Events</div>
+        <div class="flex gap-8"><a href="/export/recommendations/supplychain" class="btn btn-export btn-sm">⬇ CSV</a><button class="btn btn-ghost btn-sm" onclick="loadEvents()">↻</button></div></div>
+      <div id="events-list" style="max-height:260px;overflow-y:auto;">
+        {% for e in route_events %}
+        <div class="alert-item p2 unread" id="event-{{ e.id }}">
+          <div class="flex-between" style="gap:8px;">
+            <div><div class="alert-title">{{ e.origin }} → {{ e.destination }} <span class="text-dim">({{ e.mode }})</span></div>
+              <div class="alert-body">{{ e.event_type }} · {{ e.reason }}</div></div>
+            <button class="btn btn-ghost btn-sm" onclick="resolveEvent({{ e.id }})">Resolve</button>
+          </div>
+          <div class="alert-meta">{{ e.created_at | fmtdate }}</div>
+        </div>
+        {% else %}
+        <div class="text-dim text-xs" style="text-align:center;padding:16px;" id="no-events-msg">No active disruptions</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- What-if + cost chart + transit chart -->
+<div class="grid-3 mb-16">
+  <div class="card" id="whatif">
+    <div class="card-header"><div><div class="card-title">🔮 What-If Tool</div>
+      <div class="card-subtitle">Test before committing</div></div></div>
+    <div class="form-group">
+      <label class="form-label">Segment</label>
+      <select class="form-select" id="wi-seg">
+        <option value="FC_DELHI-FC_CHENNAI">FC Delhi → FC Chennai</option>
+        <option value="FC_DELHI-FC_MUMBAI">FC Delhi → FC Mumbai</option>
+        <option value="FC_MUMBAI-FC_CHENNAI">FC Mumbai → FC Chennai</option>
+        <option value="SUP_5-FC_DELHI">Factory Kolkata → FC Delhi</option>
+      </select>
+    </div>
+    <div class="grid-2" style="gap:8px;">
+      <div class="form-group">
+        <label class="form-label">Mode to test</label>
+        <select class="form-select" id="wi-mode">
+          <option value="rail">Rail</option><option value="road_truck">Road</option>
+          <option value="air_cargo">Air</option><option value="sea_vessel">Sea</option>
+          <option value="all_weather">All-Weather</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Block this mode?</label>
+        <select class="form-select" id="wi-blocked">
+          <option value="false">No — cost only</option><option value="true">Yes — block it</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Override Cost ₹/km <span style="color:var(--text3)">(blank = default)</span></label>
+      <input class="form-input" id="wi-cost" type="number" placeholder="e.g. 3.50">
+    </div>
+    <button class="btn btn-primary w-full" id="wi-btn" onclick="runWhatIf()" style="justify-content:center;">▶ Run Scenario</button>
+    <div id="wi-result" class="mt-8 hidden"></div>
+    <button class="btn btn-ghost btn-sm w-full mt-8" onclick="saveScenario()" id="save-scenario-btn" style="display:none;justify-content:center;">💾 Save This Scenario</button>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">💸 Mode Cost Comparison</div>
+      <select class="form-select" id="cost-route" onchange="buildCostChart()" style="width:160px;padding:4px 8px;font-size:.75rem;">
+        <option value="0">Delhi→Chennai</option>
+        <option value="1">Delhi→Mumbai</option>
+        <option value="2">Mumbai→Chennai</option>
+      </select>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-cost"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">⏱️ Transit Time by Mode</div></div>
+    <div class="chart-wrap"><canvas id="chart-transit"></canvas></div>
+  </div>
+</div>
+
+<!-- Reroute recommendations -->
+<div class="card mb-16">
+  <div class="card-header">
+    <div><div class="card-title">💡 Reroute Recommendations</div>
+      <div class="card-subtitle">LP-computed after route events · review and approve</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="loadRerouteRecs()">↻</button>
+  </div>
+  <div id="sc-recs-list" style="max-height:380px;overflow-y:auto;">
+    {% if recs %}
+      {% for r in recs %}
+      <div class="rec-card" id="rec-{{ r.id }}">
+        <div class="rec-header">
+          <div style="flex:1">
+            <div class="rec-title">{{ r.title }}</div>
+            <div class="rec-conf flex gap-8 mt-4">
+              <span class="badge badge-{{ r.priority.lower() }}">{{ r.priority }}</span>
+              <span class="badge badge-{{ r.status }}">{{ r.status }}</span>
+            </div>
+          </div>
+        </div>
+        {% if r.status == 'pending' %}
+        <div class="rec-actions mt-8">
+          <button class="btn btn-approve btn-sm" onclick="decideRec({{ r.id }},'approved','supplychain')">✓ Approve</button>
+          <button class="btn btn-modify btn-sm"  onclick="decideRec({{ r.id }},'modified','supplychain')">✎ Modify</button>
+          <button class="btn btn-reject btn-sm"  onclick="decideRec({{ r.id }},'rejected','supplychain')">✗ Reject</button>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="text-dim text-xs" style="text-align:center;padding:24px;" id="sc-recs-empty">
+        No reroute recommendations yet — log a route event to generate one.
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Scenario comparison -->
+<div class="card" id="scenarios">
+  <div class="card-header">
+    <div><div class="card-title">📐 Saved Scenarios</div>
+      <div class="card-subtitle">Compare what-if runs side by side</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="loadScenarios()">↻</button>
+  </div>
+  <div id="scenario-chips" class="flex gap-8 mb-12" style="flex-wrap:wrap;min-height:32px;">
+    <span class="text-xs text-dim" style="align-self:center;">No saved scenarios yet — run what-if and save</span>
+  </div>
+  <div id="scenario-compare-panel" class="hidden">
+    <div class="card-header" style="margin-bottom:8px;">
+      <div class="card-title" style="font-size:.82rem;">Side-by-side comparison</div>
+      <button class="btn btn-ghost btn-sm" onclick="clearComparison()">Clear</button>
+    </div>
+    <div id="scenario-compare-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const CD={responsive:true,maintainAspectRatio:true,
+  plugins:{legend:{labels:{color:'#8892a4',font:{size:10}}}},
+  scales:{x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#8892a4',font:{size:10}}}}};
+const charts={};
+let routeData=[], map=null, costData=[];
+
+// ── Map ────────────────────────────────────────────────────────
+async function initMap(){
+  map=L.map('network-map',{center:[21,78],zoom:5,zoomControl:true});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'©OpenStreetMap ©CARTO',maxZoom:18}).addTo(map);
+  const d=await apiFetch('/supplychain/network');
+  renderNetwork(d); routeData=d;
+}
+function renderNetwork(d){
+  const typeStyle={supplier:{color:'#8b5cf6',r:8},fc:{color:'#3b82f6',r:10},hub:{color:'#10b981',r:8},warehouse:{color:'#ef4444',r:12}};
+  Object.entries(d.routes).forEach(([key,route])=>{
+    const parts=key.split('-');
+    // route keys may be like FC_DELHI-FC_CHENNAI — split on first hyphen only? No, use full key
+    const oId=parts[0], dId=parts.slice(1).join('-');
+    if(!d.locations[oId]||!d.locations[dId]) return;
+    const oL=d.locations[oId],dL=d.locations[dId];
+    L.polyline([[oL.lat,oL.lon],[dL.lat,dL.lon]],{
+      color:route.is_disrupted?'#ef4444':'#3b82f6',weight:route.is_disrupted?2.5:1.5,
+      dashArray:route.is_disrupted?'6,4':null,opacity:.75
+    }).addTo(map).bindPopup(`<b>${oL.name} → ${dL.name}</b><br>Distance: ${route.dist}km<br>Modes: ${route.modes.join(', ')}<br>${route.is_disrupted?'<span style="color:#ef4444">⚠️ DISRUPTED</span>':'✅ Normal'}`);
+  });
+  Object.entries(d.locations).forEach(([id,loc])=>{
+    const st=typeStyle[loc.type]||{color:'#888',r:6};
+    L.circleMarker([loc.lat,loc.lon],{radius:st.r,fillColor:st.color,color:'#000',weight:1.5,fillOpacity:.9})
+     .addTo(map).bindPopup(`<b>${loc.name}</b><br>Type: ${loc.type}`);
+  });
+}
+async function refreshNetwork(){
+  map.eachLayer(l=>{if(!l._url) map.removeLayer(l);});
+  const d=await apiFetch('/supplychain/network');
+  renderNetwork(d); routeData=d;
+}
+
+// ── Cost & transit charts ──────────────────────────────────────
+async function buildCostChart(){
+  if(!costData.length){ costData=await apiFetch('/api/charts/route-cost-comparison'); }
+  const idx=parseInt(document.getElementById('cost-route').value)||0;
+  const route=costData[idx]; if(!route) return;
+  const ctxC=document.getElementById('chart-cost').getContext('2d');
+  if(charts.cost) charts.cost.destroy();
+  charts.cost=new Chart(ctxC,{type:'bar',data:{
+    labels:route.modes.map(m=>m.label),
+    datasets:[{label:`Cost ₹ (${route.route})`,data:route.modes.map(m=>m.cost),
+      backgroundColor:route.modes.map(m=>m.color+'cc'),borderRadius:4}]
+  },options:{...CD,plugins:{legend:{display:false}},
+    scales:{x:CD.scales.x,y:{...CD.scales.y,title:{display:true,text:'₹/unit',color:'#8892a4'}}}}});
+  const ctxT=document.getElementById('chart-transit').getContext('2d');
+  if(charts.transit) charts.transit.destroy();
+  charts.transit=new Chart(ctxT,{type:'bar',data:{
+    labels:route.modes.map(m=>m.label),
+    datasets:[{label:`Days (${route.route})`,data:route.modes.map(m=>m.days),
+      backgroundColor:route.modes.map(m=>m.color+'cc'),borderRadius:4}]
+  },options:{...CD,plugins:{legend:{display:false}},
+    scales:{x:CD.scales.x,y:{...CD.scales.y,title:{display:true,text:'Transit days',color:'#8892a4'}}}}});
+}
+
+// ── Log event ──────────────────────────────────────────────────
+function toggleCostField(){
+  document.getElementById('cost-field').classList.toggle('hidden',document.getElementById('evt-type').value!=='cost_override');
+}
+async function logEvent(){
+  const seg=document.getElementById('evt-seg').value;
+  const dashIdx=seg.indexOf('-');
+  const origin=seg.slice(0,dashIdx), dest=seg.slice(dashIdx+1);
+  const mode=document.getElementById('evt-mode').value;
+  const type=document.getElementById('evt-type').value;
+  const cost=document.getElementById('evt-cost').value;
+  const reason=document.getElementById('evt-reason').value;
+  if(!reason.trim()){showToast('Please enter a reason','error');return;}
+  const res=await apiFetch('/supplychain/routes/event',{method:'POST',
+    body:JSON.stringify({origin,destination:dest,mode,event_type:type,
+      new_cost:cost?parseFloat(cost):null,reason})});
+  if(res.event_id){
+    showToast('Event logged · Inventory team notified','success');
+    document.getElementById('s-dis').textContent=parseInt(document.getElementById('s-dis').textContent||0)+1;
+    const rr=res.reroute;
+    const panel=document.getElementById('reroute-result');
+    panel.classList.remove('hidden');
+    if(rr?.status==='rerouted'){
+      panel.innerHTML=`<div style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:6px;padding:12px;">
+        <div style="font-weight:600;font-size:.83rem;color:var(--green)">✓ Recommended reroute: ${rr.label}</div>
+        <div style="font-size:.78rem;color:var(--text2);margin-top:4px;">₹${rr.cost_per_unit}/unit · ${rr.transit_days}d · +${rr.extra_cost_pct}% vs normal</div>
+        <div style="margin-top:8px;"><button class="btn btn-approve btn-sm" onclick="showToast('Reroute approved','success')">✓ Approve reroute</button></div>
+      </div>`;
+      showToast(`Reroute: ${rr.label} (+${rr.extra_cost_pct}% cost)`,'info');
+    } else if(rr?.status==='no_alternative'){
+      panel.innerHTML=`<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:12px;color:var(--red);">🚫 No alternative modes — all paths blocked</div>`;
+    } else {
+      // Show available alternatives from whatif
+      panel.innerHTML=`<div style="font-size:.8rem;color:var(--text2);">Event logged. Check Reroute Recommendations below.</div>`;
+    }
+    loadEvents(); refreshNetwork(); loadRerouteRecs();
+  } else showToast('Error logging event: '+(res.error||'unknown'),'error');
+}
+
+async function loadEvents(){
+  const evts=await apiFetch('/supplychain/routes/events');
+  document.getElementById('s-dis').textContent=evts.length;
+  const list=document.getElementById('events-list');
+  if(!evts.length){list.innerHTML=`<div class="text-dim text-xs" style="text-align:center;padding:16px;">No active disruptions</div>`;return;}
+  list.innerHTML=evts.map(e=>`<div class="alert-item p2 unread" id="event-${e.id}">
+    <div class="flex-between" style="gap:8px;">
+      <div><div class="alert-title">${e.origin} → ${e.destination} <span class="text-dim">(${e.mode})</span></div>
+        <div class="alert-body">${e.event_type} · ${e.reason}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="resolveEvent(${e.id})">Resolve</button>
+    </div>
+    <div class="alert-meta">${fmtIST(e.created_at)}</div>
+  </div>`).join('');
+}
+async function resolveEvent(id){
+  await apiFetch(`/supplychain/routes/event/${id}/resolve`,{method:'POST',body:'{}'});
+  showToast('Event resolved','success'); loadEvents(); refreshNetwork();
+}
+
+// ── Reroute recommendations ────────────────────────────────────
+async function loadRerouteRecs(){
+  const recs=await apiFetch('/supplychain/recommendations');
+  const list=document.getElementById('sc-recs-list');
+  if(!recs||!recs.length){
+    list.innerHTML=`<div class="text-dim text-xs" style="text-align:center;padding:24px;">No reroute recommendations yet — log a route event to generate one.</div>`;
+    document.getElementById('s-rr').textContent=0; return;
+  }
+  const pending=recs.filter(r=>r.status==='pending');
+  document.getElementById('s-rr').textContent=pending.length;
+  list.innerHTML=recs.map(r=>{
+    const d=r.detail||{};
+    const decided=r.status!=='pending';
+    return `<div class="rec-card" id="rec-${r.id}">
+      <div class="rec-header">
+        <div style="flex:1">
+          <div class="rec-title">${r.title}</div>
+          <div class="rec-conf flex gap-8 mt-4">
+            <span class="badge badge-${(r.priority||'p3').toLowerCase()}">${r.priority||'P3'}</span>
+            <span class="badge badge-${r.status}">${r.status}</span>
+          </div>
+        </div>
+      </div>
+      ${d.recommended_mode?`<div class="rec-detail mt-8" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;">
+          <div class="text-xs text-dim mono">Recommended Mode</div>
+          <div style="font-weight:700;font-size:.85rem;margin-top:2px;color:var(--green)">${d.recommended_mode}</div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center;">
+          <div class="text-xs text-dim mono">Extra Cost</div>
+          <div style="font-weight:700;font-size:.85rem;margin-top:2px;color:var(--p2)">+${d.extra_cost_pct||0}%</div>
+        </div>
+      </div>`:''}
+      ${confBar(r.confidence||0.7)}
+      ${!decided?`<div class="rec-actions mt-8">
+        <button class="btn btn-approve btn-sm" onclick="decideRec(${r.id},'approved','supplychain')">✓ Approve</button>
+        <button class="btn btn-modify btn-sm"  onclick="decideRec(${r.id},'modified','supplychain')">✎ Modify</button>
+        <button class="btn btn-reject btn-sm"  onclick="decideRec(${r.id},'rejected','supplychain')">✗ Reject</button>
+      </div>`:r.decision_note?`<div class="mt-8 text-xs text-dim">📝 ${r.decision_note}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ── What-If (single clean implementation) ─────────────────────
+let _lastWiResult = null;
+async function runWhatIf(){
+  const btn=document.getElementById('wi-btn');
+  btn.textContent='⏳ Running…'; btn.disabled=true;
+  const seg=document.getElementById('wi-seg').value;
+  const dashIdx=seg.indexOf('-');
+  const origin=seg.slice(0,dashIdx), dest=seg.slice(dashIdx+1);
+  const mode=document.getElementById('wi-mode').value;
+  const newCost=document.getElementById('wi-cost').value;
+  const blocked=document.getElementById('wi-blocked').value==='true';
+  const panel=document.getElementById('wi-result');
+  try{
+    const res=await apiFetch('/supplychain/whatif',{method:'POST',
+      body:JSON.stringify({origin,destination:dest,mode,new_cost:newCost?parseFloat(newCost):null,blocked})});
+    panel.classList.remove('hidden');
+    if(res.error){panel.innerHTML=`<div style="color:var(--red)">⚠ ${res.error}</div>`;return;}
+    if(res.status==='blocked'){panel.innerHTML=`<div style="color:var(--red)">🚫 All modes blocked on this segment</div>`;return;}
+    const rec=res.recommended;
+    panel.innerHTML=`
+      <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:6px;padding:12px;margin-bottom:8px;">
+        <div style="font-weight:600;font-size:.82rem;color:var(--green)">★ Recommended: ${rec.label}</div>
+        <div style="font-size:.75rem;color:var(--text2);margin-top:3px;">₹${rec.cost_per_unit}/unit · ${rec.transit_days}d transit</div>
+      </div>
+      <table class="data-table"><thead><tr><th>Mode</th><th>₹/unit</th><th>Days</th></tr></thead><tbody>
+        ${res.options.map(o=>`<tr style="${o.mode===rec.mode?'background:rgba(255,255,255,.04)':''}">
+          <td style="color:${o.color||'var(--text2)'}">${o.label}${o.mode===rec.mode?' ★':''}</td>
+          <td class="mono">₹${o.cost_per_unit}</td><td class="mono">${o.transit_days}d</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+    // Save result for scenario saving
+    _lastWiResult = {...res, segment: seg};
+    document.getElementById('save-scenario-btn').style.display='flex';
+  } catch(e){
+    panel.classList.remove('hidden');
+    panel.innerHTML=`<div style="color:var(--red)">Error: ${e}</div>`;
+  }
+  btn.textContent='▶ Run Scenario'; btn.disabled=false;
+}
+
+// ── Scenario comparison ────────────────────────────────────────
+function saveScenario(){
+  if(!_lastWiResult) return;
+  openModal('Save Scenario',
+    `<div class="form-group"><label class="form-label">Scenario Name</label>
+     <input class="form-input" id="sc-name" placeholder="e.g. Monsoon reroute via air" value=""></div>`,
+    async()=>{
+      const title=document.getElementById('sc-name').value||'Unnamed scenario';
+      await apiFetch('/api/scenarios/save',{method:'POST',body:JSON.stringify({..._lastWiResult,title})});
+      closeModal(); showToast('Scenario saved','success'); loadScenarios();
+    },'Save');
+}
+
+let _selectedScenarios=new Set();
+async function loadScenarios(){
+  const scenarios=await apiFetch('/api/scenarios');
+  const container=document.getElementById('scenario-chips');
+  if(!scenarios.length){
+    container.innerHTML='<span class="text-xs text-dim" style="align-self:center;">No saved scenarios yet — run what-if and save</span>'; return;
+  }
+  container.innerHTML=scenarios.map(s=>
+    `<div class="scenario-chip ${_selectedScenarios.has(s.id)?'selected':''}" id="chip-${s.id}" onclick="toggleScenario(${s.id})">
+      📐 ${s.title}
+    </div>`
+  ).join('');
+}
+function toggleScenario(id){
+  if(_selectedScenarios.has(id)) _selectedScenarios.delete(id);
+  else _selectedScenarios.add(id);
+  loadScenarios();
+  if(_selectedScenarios.size>=2) compareScenarios();
+  else document.getElementById('scenario-compare-panel').classList.add('hidden');
+}
+async function compareScenarios(){
+  const ids=[..._selectedScenarios];
+  const data=await apiFetch('/api/scenarios/compare',{method:'POST',body:JSON.stringify({ids})});
+  const grid=document.getElementById('scenario-compare-grid');
+  const colors=['#3b82f6','#10b981','#f0a500','#ef4444'];
+  grid.innerHTML=data.map((sc,i)=>{
+    const rec=sc.recommended||{};
+    const opts=(sc.options||[]).map(o=>
+      `<tr><td style="color:${o.color||'#888'}">${o.label}</td><td class="mono">₹${o.cost_per_unit}</td><td class="mono">${o.transit_days}d</td></tr>`
+    ).join('');
+    return `<div style="border:1px solid ${colors[i%4]};border-radius:8px;padding:14px;">
+      <div style="font-weight:700;font-size:.82rem;color:${colors[i%4]};margin-bottom:8px;">${sc.title}</div>
+      <div style="font-size:.72rem;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:6px;">${sc.segment||''}</div>
+      <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:8px;margin-bottom:8px;">
+        <div style="font-size:.75rem;font-weight:600;color:var(--green);">★ Best: ${rec.label||'—'}</div>
+        <div style="font-size:.7rem;color:var(--text2);">₹${rec.cost_per_unit||0}/unit · ${rec.transit_days||0}d</div>
+      </div>
+      <table class="data-table" style="font-size:.72rem;"><thead><tr><th>Mode</th><th>₹/unit</th><th>Days</th></tr></thead><tbody>${opts}</tbody></table>
+    </div>`;
+  }).join('');
+  document.getElementById('scenario-compare-panel').classList.remove('hidden');
+}
+function clearComparison(){
+  _selectedScenarios.clear(); loadScenarios();
+  document.getElementById('scenario-compare-panel').classList.add('hidden');
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  initMap(); buildCostChart(); loadEvents(); loadScenarios(); loadRerouteRecs();
+});
+</script>
+{% endblock %}
