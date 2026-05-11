@@ -1,0 +1,18 @@
+# ── Core (always required) ────────────────────────────────────────────────────
+flask>=3.0
+werkzeug>=3.0
+numpy>=1.24
+scipy>=1.10
+scikit-learn>=1.3
+pandas>=2.0          # required for real engine
+psycopg2-binary>=2.9 # Neon PostgreSQL driver
+python-dotenv>=1.0   # loads DATABASE_URL from .env file
+pyngrok
+
+# ── Real ML engine (optional — auto-activates when installed) ─────────────────
+
+prophet>=1.1         # Facebook Prophet (Stan backend)
+torch>=2.0           # PyTorch (CPU or CUDA)
+
+# ── Recommended for Colab / GPU training ─────────────────────────────────────
+# torch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
